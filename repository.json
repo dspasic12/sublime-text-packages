@@ -11,8 +11,10 @@
             "readme": "https://raw.githubusercontent.com/dspasic12/sublime-text-packages/main/packages/kubeseal/README.md",
             "releases": [
                 {
-                    "sublime_text": ">=3000",
-                    "tags": true
+                    "version": "1.0.0",
+                    "url": "https://github.com/dspasic12/sublime-text-packages/releases/download/v1.0.0/kubeseal.zip",
+                    "date": "2026-02-06 12:00:00",
+                    "sublime_text": ">=3000"
                 }
             ]
         }
