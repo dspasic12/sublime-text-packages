@@ -1,0 +1,20 @@
+{
+    "schema_version": "3.0.0",
+    "packages": [
+        {
+            "name": "Kubeseal",
+            "description": "Encrypt/decrypt strings with kubeseal",
+            "author": "Dusan Spasic",
+            "details": "https://github.com/dspasic12/sublime-text-packages",
+            "homepage": "https://github.com/dspasic12/sublime-text-packages",
+            "issues": "https://github.com/dspasic12/sublime-text-packages/issues",
+            "readme": "https://raw.githubusercontent.com/dspasic12/sublime-text-packages/main/packages/kubeseal/README.md",
+            "releases": [
+                {
+                    "sublime_text": ">=3000",
+                    "tags": true
+                }
+            ]
+        }
+    ]
+}

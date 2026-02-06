@@ -1,0 +1,44 @@
+# Sublime Text Packages
+
+This repository contains custom Sublime Text packages.
+
+## Available Packages
+
+### Kubeseal
+Encrypt/decrypt strings with kubeseal for Kubernetes sealed secrets.
+
+## Installation Instructions
+
+### Method 1: Using Package Control (Recommended)
+
+1. **Install Package Control** (if not already installed):
+   - Open Sublime Text
+   - Press `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (Mac)
+   - Type "Install Package Control" and press Enter
+
+2. **Add this repository**:
+   - Open Sublime Text
+   - Go to `Preferences` → `Package Settings` → `Package Control` → `Settings - User`
+   - Add this repository URL to the `repositories` list:
+
+```json
+{
+    &quot;repositories&quot;: [
+        &quot;https://raw.githubusercontent.com/dspasic12/sublime-text-packages/main/repository.json&quot;
+    ]
+}
+
+
+## Repo structure:
+
+sublime-text-packages/
+├── README.md
+├── repository.json
+└── packages/
+    └── kubeseal/
+        ├── Main.sublime-menu
+        ├── Default.sublime-commands
+        ├── kubeseal.py
+        └── README.md
+
+

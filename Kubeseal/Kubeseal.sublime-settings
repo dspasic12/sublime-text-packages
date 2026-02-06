@@ -1,0 +1,12 @@
+{
+    "cert_path": "/path/to/your/sealed-secrets-public.pem",
+    "private_key_path": "/path/to/your/sealed-secrets-private.key",
+    "timeout": 30,
+    "decrypt_output": "new_tab",
+    "auto_save_decrypted": false,
+    "show_progress": true,
+    "validate_k8s_names": true,
+    "max_selections": 10,
+    "default_namespace": "default",
+    "default_secret_name": "mysecret"
+}

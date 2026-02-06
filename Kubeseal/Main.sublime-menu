@@ -1,0 +1,32 @@
+[
+    {
+        "id": "tools",
+        "children": [
+            {
+                "caption": "Kubeseal",
+                "id": "kubeseal",
+                "children": [
+                    {
+                        "caption": "Encrypt Selected Text",
+                        "command": "kubeseal_encrypt"
+                    },
+                    {
+                        "caption": "Decrypt Selected Text",
+                        "command": "kubeseal_decrypt"
+                    },
+                    {
+                        "caption": "-"
+                    },
+                    {
+                        "caption": "Validate Configuration",
+                        "command": "kubeseal_validate_config"
+                    },
+                    {
+                        "caption": "Open Settings",
+                        "command": "kubeseal_open_settings"
+                    }
+                ]
+            }
+        ]
+    }
+]

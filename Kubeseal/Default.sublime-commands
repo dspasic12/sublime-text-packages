@@ -1,0 +1,18 @@
+[
+    {
+        "caption": "Kubeseal: Encrypt Selected Text",
+        "command": "kubeseal_encrypt"
+    },
+    {
+        "caption": "Kubeseal: Decrypt Selected Text",
+        "command": "kubeseal_decrypt"
+    },
+    {
+        "caption": "Kubeseal: Validate Configuration",
+        "command": "kubeseal_validate_config"
+    },
+    {
+        "caption": "Kubeseal: Open Settings",
+        "command": "kubeseal_open_settings"
+    }
+]

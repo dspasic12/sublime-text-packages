@@ -1,0 +1,10 @@
+[
+    {
+        "keys": ["ctrl+k", "ctrl+e"],
+        "command": "kubeseal_encrypt"
+    },
+    {
+        "keys": ["ctrl+k", "ctrl+d"],
+        "command": "kubeseal_decrypt"
+    }
+]

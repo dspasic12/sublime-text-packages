@@ -1,0 +1,11 @@
+Configuration:
+1. Go to Preferences → Package Settings → Kubeseal → Settings
+2. Set your certificate and private key paths
+3. Run "Kubeseal: Validate Configuration" to test setup
+
+Usage:
+- Select text → Ctrl+K, Ctrl+E to encrypt
+- Select encrypted text → Ctrl+K, Ctrl+D to decrypt
+
+note: if namespace and/or secret-name var is not present in the secret file - you wil get prompt to enter them.
+

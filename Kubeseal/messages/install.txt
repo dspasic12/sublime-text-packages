@@ -1,0 +1,15 @@
+Kubeseal Plugin for Sublime Text
+================================
+
+Thank you for installing the Kubeseal plugin!
+
+Configuration:
+1. Go to Preferences → Package Settings → Kubeseal → Settings
+2. Set your certificate and private key paths
+3. Run "Kubeseal: Validate Configuration" to test setup
+
+Usage:
+- Select text → Ctrl+K, Ctrl+E to encrypt
+- Select encrypted text → Ctrl+K, Ctrl+D to decrypt
+
+Documentation: https://github.com/dspasic12/sublime-text-packages/kubeseal
