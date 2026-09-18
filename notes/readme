@@ -1,0 +1,78 @@
+# ST4Notes
+
+Daily notes + YouTrack / GitLab integration for Sublime Text 4.
+
+Stores a single plain-text notes file (`ST4Notes` syntax), with commands to add/search entries, open tickets, import issues, optionally post YouTrack comments, and hover GitLab MRs.
+
+## Commands (Cmd+Shift+P / Ctrl+Shift+P)
+
+| Command | What it does |
+|---------|----------------|
+| **Notes: Add** | Pick ticket → multi-line description scratch → commit |
+| **Notes: Commit Description** | Commit the Add description buffer (also **Cmd/Ctrl+Enter**) |
+| **Notes: Edit** | Open the notes file |
+| **Notes: Search** | Quick-panel search over tickets / TODO / OPS |
+| **Notes: Open Issue** | Open a ticket in the browser (or list YouTrack issues) |
+| **Notes: Weekly Summary** | Scratch view of recent activity (sorted by **date**, not time) |
+| **Notes: Weekly Search** | Search within the weekly window |
+| **Notes: Create Issue** | Create a YouTrack issue (optional stage sub-tasks) |
+| **Notes: Settings** | Edit package settings |
+
+## Notes: Add (multi-line)
+
+1. Command Palette → **Notes: Add** → pick ticket / TODO / OPS / YouTrack import  
+2. A scratch buffer opens — **one bullet per line**  
+3. **Cmd+Enter** (Mac) / **Ctrl+Enter** (Win/Linux) or **Notes: Commit Description**
+
+Example result:
+
+```
+# PROJ-1234:
+- first line
+- second line
+- [DONE]<<-
+```
+
+No `[HH:MM]` timestamps are added (legacy timestamps in old notes still highlight).
+
+## Hover
+
+- **YouTrack** issue URL / ticket id → summary, state, assignee, …  
+- **GitLab MR** URL (`…/-/merge_requests/N`) → status (open/merged/closed), pipeline status, changed files (requires `gitlab_base` + `gitlab_token`)
+  - Click a changed file → browser opens the MR **Changes** tab focused on that file (`#diff-content-{sha1(path)}`)
+
+## Settings
+
+Preferences → Package Settings → ST4Notes (keep tokens in **User** settings only)
+
+| Key | Notes |
+|-----|--------|
+| `notes_file` | Default `~/Documents/ST4Notes` |
+| `youtrack_base` / `youtrack_token` | YouTrack |
+| `gitlab_base` / `gitlab_token` | GitLab MR hover (`read_api`) |
+| `note_max_lines` / `note_max_line_len` | Multi-line Add limits (50 / 500) |
+| `post_comments` | Default `false` |
+
+## Safety
+
+- HTTPS-only YouTrack / GitLab bases; private/loopback/CGNAT hosts rejected  
+- Hover / navigate opens **https:// only** (rejects `javascript:` / `file:` / plain http)  
+- API calls refuse HTTP redirects (Bearer / PRIVATE-TOKEN not forwarded)  
+- Notes read-modify-write serialized (`_notes_io_lock`); atomic write + mode `0600`  
+- Notes file hard cap 8 MiB (read/write)  
+- Package defaults ship empty tokens  
+- DONE / REVIEW YouTrack state changes require confirm (single-line only)
+
+## Install / live symlink
+
+Do **not** keep a second `notes_plugin.py` / `*.sublime-commands` / `ST4Notes.sublime-syntax` under `Packages/User/` (even in a `_disabled_*` folder) — Sublime loads those and duplicates every Command Palette entry.
+
+```bash
+ln -s "/path/to/sublime-text-packages/notes" \
+  "$HOME/Library/Application Support/Sublime Text/Packages/notes"
+```
+
+## Requirements
+
+- Sublime Text 4  
+- Optional YouTrack + GitLab tokens for API features
