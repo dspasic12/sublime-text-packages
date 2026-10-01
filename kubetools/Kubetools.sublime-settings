@@ -1,0 +1,109 @@
+{
+    // =========================================================================
+    // Kubetools — Preferences → Package Settings → Kubetools → Settings – User
+    // Copy keys you want to change into the User file (right pane).
+    // Paths support ${home}, ${packages}, and ~ expansion.
+    // =========================================================================
+
+    // --- Binaries ------------------------------------------------------------
+    // kubectl (empty / "kubectl" = PATH)
+    "kubectl_path": "kubectl",
+    // Optional absolute path if GUI Sublime misses Homebrew PATH
+    "kubeseal_path": "",
+
+    // Seconds before kubectl / kubeseal commands time out
+    "timeout": 60,
+
+    // --- Apply safety (hard-locked ON in code; listed for documentation) -----
+    "always_pass_context": true,
+    "dry_run_before_apply": true,
+    "require_confirmation": true,
+
+    // Show kubectl diff (or "new resource") before apply confirmation
+    "show_diff_before_apply": true,
+
+    // Extra confirm when kubectl context / seal stage name matches any pattern
+    // Patterns support * wildcards; matching is case-insensitive
+    "dangerous_context_patterns": [
+        "*prod*",
+        "*production*",
+        "*-prod-*",
+        "prod-*",
+        "*prd*",
+        "*live*"
+    ],
+    "dangerous_context_require_type_name": true,
+
+    // Pre-highlight kubectl context from the open file path (exact segment /
+    // environments/<env>/<cluster>/). NEVER skips the context quick panel —
+    // user must always confirm. Dangerous contexts still require type-to-confirm.
+    "guess_context_from_path": true,
+
+    // Optional map when folder name ≠ context name, e.g. { "prod-eu1": "org-prod-eu1" }
+    "context_path_aliases": {},
+
+    "warn_unsaved_buffer": true,
+    "warn_secret_resources": true,
+    "require_secret_confirm": true,
+    "block_on_unverified_resources": true,
+
+    // Soft caps (raise only intentionally)
+    "max_resources": 50,
+    "max_manifest_bytes": 2097152,
+
+    // Namespace picker: "quick_panel" | "input"
+    "namespace_picker": "quick_panel",
+    "default_namespace": "default",
+
+    // kubectl apply
+    "validate": true,
+    "server_side_apply": false,
+    "field_manager": "sublime-kubetools",
+
+    // Results always open in a scratch tab (macOS ST4-safe)
+    "show_result_in_tab": true,
+
+    // =========================================================================
+    // Seal / unseal (kubeseal) — formerly Kubeseal package
+    // If "stages" is empty, stages are loaded from User Kubeseal.sublime-settings
+    // (migration). Prefer copying stages into THIS User settings file.
+    // =========================================================================
+
+    // Per-stage sealed-secrets keys. Configure in Settings – User (right pane).
+    // Example entry:
+    // {
+    //     "name": "dev",
+    //     "description": "Development cluster",
+    //     "cert_path": "${home}/path/to/dev/sealed-secrets/pub.pem",
+    //     "private_key_path": "${home}/path/to/dev/sealed-secrets/priv.key"
+    // }
+    // If empty, stages are loaded from User/Kubeseal.sublime-settings (migration).
+    "stages": [],
+
+    // Pre-select this stage when the open file path does not imply one
+    "default_stage": "",
+
+    // true in defaults; hard-locked ON in code — stage panel always shown
+    "ask_stage_every_time": true,
+
+    // Updated automatically when you pick a stage
+    "last_stage": "",
+
+    // Unseal output: "new_tab" | "popup"
+    "decrypt_output": "new_tab",
+    // After unseal, base64-decode Secret.data for readability
+    "decode_secret_data": true,
+    "validate_k8s_names": true,
+    // Confirm before re-encrypting selections that already look sealed
+    "confirm_reseal_selection": true,
+    // Confirm before overwriting an existing *-sealedsecret.yaml (.bckp-* backup)
+    "confirm_overwrite_sealed": true,
+    // After full-file seal, offer Compare State on the sealed file
+    "offer_compare_after_seal": true,
+    "max_selections": 10,
+    "default_secret_name": "mysecret",
+
+    // Legacy single-key fallback (only when "stages" is empty)
+    "cert_path": "",
+    "private_key_path": ""
+}

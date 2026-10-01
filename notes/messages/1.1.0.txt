@@ -1,0 +1,9 @@
+ST4Notes / notes 1.1.0
+======================
+
+- Package Control name aligned to folder `notes` (was ST4Notes — Settings paths match)
+- Hover popups guard view.is_valid() after async fetch
+- notes_file returns realpath after jail check
+- plugin_loaded / add_on_change invalidates notes caches
+- MIT LICENSE added
+- Requires Sublime Text build with Python 3.14 plugin host (.python-version)

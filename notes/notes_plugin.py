@@ -1,6 +1,7 @@
 # =============================================================================
 # notes_plugin.py  —  Sublime Text 4 Notes Plugin (ST4Notes)
 # Package: notes/  (Sublime Text Packages directory)
+# Requires plugin host Python 3.14 (see .python-version)
 # =============================================================================
 
 from __future__ import annotations
@@ -34,12 +35,60 @@ import sublime_plugin
 _DEFAULT_NOTES_PATH = "~/Documents/ST4Notes"
 
 
+def _notes_root_jail() -> str:
+    """Optional allowlist root for notes_file (settings: notes_path_jail)."""
+    raw = _settings().get("notes_path_jail", "~")
+    if not isinstance(raw, str) or not raw.strip():
+        raw = "~"
+    return os.path.realpath(os.path.expanduser(raw.strip()))
+
+
+def _assert_notes_path_in_jail(abs_path: str) -> None:
+    """Refuse notes paths that escape the configured jail (default: $HOME)."""
+    jail = _notes_root_jail()
+    try:
+        real = os.path.realpath(abs_path)
+    except OSError as exc:
+        raise RuntimeError(f"Cannot resolve notes path: {exc}") from exc
+    # Allow the file itself or paths under jail
+    if real == jail or real.startswith(jail + os.sep):
+        return
+    raise RuntimeError(
+        f"Refusing notes_file outside notes_path_jail.\n"
+        f"path: {real}\njail: {jail}\n"
+        "Set notes_path_jail in ST4Notes settings if intentional."
+    )
+
+
+def _scrub_error_text(message: object) -> str:
+    """Never surface API tokens in UI / logs."""
+    msg = "" if message is None else str(message)
+    for tok in (_youtrack_token(), _gitlab_token()):
+        if tok and len(tok) >= 8:
+            msg = msg.replace(tok, "[redacted]")
+    msg = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", msg)
+    msg = re.sub(r"(?i)(private-token:\s*)\S+", r"\1[redacted]", msg)
+    return msg
+
+
 def _notes_file() -> str:
-    """Absolute path to the notes file (settings: notes_file)."""
+    """Absolute real path to the notes file (settings: notes_file)."""
     path = _settings().get("notes_file", _DEFAULT_NOTES_PATH)
     if not isinstance(path, str) or not path.strip():
         path = _DEFAULT_NOTES_PATH
-    return os.path.expanduser(path.strip())
+    abs_path = os.path.expanduser(path.strip())
+    _assert_notes_path_in_jail(abs_path)
+    try:
+        return os.path.realpath(abs_path)
+    except OSError:
+        return os.path.abspath(abs_path)
+
+def _error_message(message: object) -> None:
+    sublime.error_message(_scrub_error_text(message))
+
+
+def _status_message(message: object) -> None:
+    sublime.status_message(_scrub_error_text(message))
 
 
 _TICKET_RE               = re.compile(r"^[A-Z0-9][A-Z0-9_\-]{0,63}$")
@@ -1607,7 +1656,7 @@ def _build_hover_html(
         priority_row = None
 
     FIELDS: list[tuple[str, str, str]] = []
-    FIELDS.append(("summary",  info.get("summary",  ""), "#cdd9e5"))
+    FIELDS.append(("summary",  info.get("summary",  ""), "#000000"))
     if priority_row:
         FIELDS.append(priority_row)
     if severity_row:
@@ -1827,11 +1876,11 @@ def _finish_add_description(
             f"Notes: [{ticket_id}] added {n} line(s)."
         )
     except RuntimeError as exc:
-        sublime.error_message(f"Notes - could not write entry:\n\n{exc}")
+        _error_message(f"Notes - could not write entry:\n\n{exc}")
         return
     except Exception as exc:
         log.exception("Unexpected error in add_note")
-        sublime.error_message(
+        _error_message(
             f"Notes - unexpected error:\n\n{type(exc).__name__}: {exc}"
         )
         return
@@ -1910,7 +1959,7 @@ class NotesCommitDescriptionCommand(sublime_plugin.WindowCommand):
             return
         ticket_id = view.settings().get("stnotes_add_ticket_id") or ""
         if not ticket_id:
-            sublime.error_message("Notes: missing ticket id on description buffer")
+            _error_message("Notes: missing ticket id on description buffer")
             return
         desc = _extract_description_from_add_view(view)
         # Close scratch before write so user returns to previous view
@@ -2324,7 +2373,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
     def _start_create_issue(self) -> None:
         if not _youtrack_token() or not _youtrack_base():
             self._active = False
-            sublime.error_message(
+            _error_message(
                 "Notes - YouTrack not configured.\n\n"
                 "Run 'Notes - Settings' and set:\n"
                 '  "youtrack_base":  "https://youtrack.example.com/issue/"\n'
@@ -2335,7 +2384,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
         base_err = _validate_youtrack_base(_youtrack_base())
         if base_err:
             self._active = False
-            sublime.error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
+            _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
             return
 
         self._ci_with_stages        = False
@@ -2591,7 +2640,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
         except IssueCreateError as exc:
             err_msg = str(exc)
             sublime.set_timeout(
-                lambda: sublime.error_message(f"Notes - failed to create issue:\n\n{err_msg}"), 0
+                lambda: _error_message(f"Notes - failed to create issue:\n\n{err_msg}"), 0
             )
             return
 
@@ -2663,7 +2712,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
             except IssueCreateError as exc:
                 err_msg = str(exc)
                 sublime.set_timeout(
-                    lambda: sublime.error_message(
+                    lambda: _error_message(
                         f"Notes - failed to create parent issue:\n\n{err_msg}"
                     ), 0,
                 )
@@ -2739,7 +2788,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
         project = _default_project()
         if not project:
             self._active = False
-            sublime.error_message(
+            _error_message(
                 "Notes - default_project is not set.\n\n"
                 "Run 'Notes - Settings' and set:\n"
                 '  "default_project": "MYPROJECT"'
@@ -2868,7 +2917,7 @@ class NotesSearchCommand(sublime_plugin.WindowCommand):
         try:
             index, all_tickets = _get_ticket_index()
         except RuntimeError as exc:
-            sublime.error_message(f"Notes - cannot read file:\n\n{exc}")
+            _error_message(f"Notes - cannot read file:\n\n{exc}")
             return
 
         if not index:
@@ -2990,7 +3039,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
     def run(self) -> None:
         base = _youtrack_base()
         if not base:
-            sublime.error_message(
+            _error_message(
                 "Notes - YouTrack base URL not configured.\n\n"
                 "Run 'Notes - Settings' and set:\n"
                 '  "youtrack_base": "https://youtrack.example.com/issue/"'
@@ -2999,7 +3048,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
 
         base_err = _validate_youtrack_base(base)
         if base_err:
-            sublime.error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
+            _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
             return
 
         self._base = base
@@ -3007,7 +3056,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
         try:
             index, all_tickets = _get_ticket_index()
         except RuntimeError as exc:
-            sublime.error_message(f"Notes - cannot read file:\n\n{exc}")
+            _error_message(f"Notes - cannot read file:\n\n{exc}")
             return
 
         tickets = [
@@ -3087,7 +3136,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
             sublime.status_message("Notes: no ticket ID entered - cancelled.")
             return
         if not _ISSUE_ID_RE.match(tid):
-            sublime.error_message(
+            _error_message(
                 "Notes - invalid ticket ID.\n\n"
                 "Expected form: PROJ-1234"
             )
@@ -3116,7 +3165,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
         self, issues: list[dict], project: str, err_msg: str | None
     ) -> None:
         if err_msg and not issues:
-            sublime.error_message(
+            _error_message(
                 f"Notes: could not fetch issues for {project}\n\n{err_msg}"
             )
             return
@@ -3179,7 +3228,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
         self, issues: list[dict], project: str, err_msg: str | None
     ) -> None:
         if err_msg and not issues:
-            sublime.error_message(
+            _error_message(
                 f"Notes: could not fetch unassigned issues for {project}\n\n{err_msg}"
             )
             return
@@ -3226,7 +3275,7 @@ class NotesWeeklySearchCommand(sublime_plugin.WindowCommand):
         try:
             lines = _read_notes()
         except RuntimeError as exc:
-            sublime.error_message(f"Notes - cannot read file:\n\n{exc}")
+            _error_message(f"Notes - cannot read file:\n\n{exc}")
             return
         if not lines:
             sublime.status_message("Notes: file is empty.")
@@ -3288,7 +3337,7 @@ class NotesWeeklySummaryCommand(sublime_plugin.WindowCommand):
         try:
             lines = _read_notes()
         except RuntimeError as exc:
-            sublime.error_message(f"Notes - cannot read file:\n\n{exc}")
+            _error_message(f"Notes - cannot read file:\n\n{exc}")
             return
         if not lines:
             sublime.status_message("Notes: file is empty.")
@@ -3338,7 +3387,7 @@ class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
 
     def run(self) -> None:
         if not _youtrack_token() or not _youtrack_base():
-            sublime.error_message(
+            _error_message(
                 "Notes - YouTrack not configured.\n\n"
                 "Run 'Notes - Settings' and set:\n"
                 '  "youtrack_base":  "https://youtrack.example.com/issue/"\n'
@@ -3348,7 +3397,7 @@ class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
 
         base_err = _validate_youtrack_base(_youtrack_base())
         if base_err:
-            sublime.error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
+            _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
             return
 
         if self._active:
@@ -3613,7 +3662,7 @@ class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
         except IssueCreateError as exc:
             err_msg = str(exc)
             sublime.set_timeout(
-                lambda: sublime.error_message(
+                lambda: _error_message(
                     f"Notes - failed to create issue:\n\n{err_msg}"
                 ), 0,
             )
@@ -3687,7 +3736,7 @@ class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
             except IssueCreateError as exc:
                 err_msg = str(exc)
                 sublime.set_timeout(
-                    lambda: sublime.error_message(
+                    lambda: _error_message(
                         f"Notes - failed to create parent issue:\n\n{err_msg}"
                     ), 0,
                 )
@@ -3765,14 +3814,14 @@ class NotesEditCommand(sublime_plugin.WindowCommand):
     def run(self) -> None:
         try:
             if os.path.isdir(_notes_file()):
-                sublime.error_message(
+                _error_message(
                     f"Notes - path is a directory, not a file:\n{_notes_file()}"
                 )
                 return
             if not os.path.exists(_notes_file()):
                 _write_notes([])
         except RuntimeError as exc:
-            sublime.error_message(f"Notes - cannot create file:\n\n{exc}")
+            _error_message(f"Notes - cannot create file:\n\n{exc}")
             return
 
         view = self.window.open_file(_notes_file())
@@ -4288,7 +4337,7 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
         parsed = _parse_gitlab_mr_url(url)
         if not parsed:
             html = _build_mr_hover_html(url, None)
-            sublime.set_timeout(lambda: view.update_popup(html), 0)
+            sublime.set_timeout(lambda: self._safe_update_popup(view, html), 0)
             return
         _host, project_path, iid = parsed
         info = _fetch_gitlab_mr_info(project_path, iid)
@@ -4296,7 +4345,7 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
             html = _build_mr_hover_html(url, None, not_found=True)
         else:
             html = _build_mr_hover_html(url, info)
-        sublime.set_timeout(lambda: view.update_popup(html), 0)
+        sublime.set_timeout(lambda: self._safe_update_popup(view, html), 0)
 
     def _fetch_and_update(self, view, point, ticket_id, url):
         raw = _fetch_youtrack_issue(ticket_id)
@@ -4307,7 +4356,16 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
         else:
             info = _parse_youtrack_issue(raw)
             html = _build_hover_html(ticket_id, url, info)
-        sublime.set_timeout(lambda: view.update_popup(html), 0)
+        sublime.set_timeout(lambda: self._safe_update_popup(view, html), 0)
+
+    @staticmethod
+    def _safe_update_popup(view, html):
+        try:
+            if view is None or not view.is_valid():
+                return
+            view.update_popup(html)
+        except Exception:
+            pass
 
     def _ticket_id_from_url(self, url, base):
         if not base:
@@ -4474,3 +4532,42 @@ def _parse_youtrack_issue(issue: dict) -> dict[str, str]:
                 result["severity"] = value.strip()
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Package lifecycle (ST recommendation)
+# ---------------------------------------------------------------------------
+
+_SETTINGS_LISTENER_KEY = "st4notes-settings-listener"
+
+
+def _on_settings_change():
+    """Invalidate caches when User settings change."""
+    try:
+        _invalidate_notes_cache()
+    except Exception:
+        pass
+    try:
+        global _index_cache_mtime, _index_cache_data
+        with _index_cache_lock:
+            _index_cache_mtime = None
+            _index_cache_data = None
+    except Exception:
+        pass
+
+
+def plugin_loaded():
+    try:
+        s = sublime.load_settings(_SETTINGS_FILE)
+        s.clear_on_change(_SETTINGS_LISTENER_KEY)
+        s.add_on_change(_SETTINGS_LISTENER_KEY, _on_settings_change)
+    except Exception:
+        pass
+
+
+def plugin_unloaded():
+    try:
+        s = sublime.load_settings(_SETTINGS_FILE)
+        s.clear_on_change(_SETTINGS_LISTENER_KEY)
+    except Exception:
+        pass

@@ -2,6 +2,10 @@
     // Absolute or ~ -expanded path to the single notes file.
     "notes_file": "~/Documents/ST4Notes",
 
+    // notes_file must resolve under this directory (default: home).
+    // Raise intentionally only if you keep notes outside $HOME.
+    "notes_path_jail": "~",
+
     // YouTrack issue browser base URL (https required; trailing slash recommended).
     // Example: "https://youtrack.example.com/issue/"
     "youtrack_base": "",

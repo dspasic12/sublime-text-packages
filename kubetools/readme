@@ -1,0 +1,98 @@
+# Kubetools
+
+Sublime Text 4 plugin: **inline compare** of open Kubernetes YAML to live cluster
+state, **seal / unseal** (kubeseal), plus apply / dry-run.
+
+Requires plugin host **Python 3.14** (see `.python-version`; Sublime Text build
+with the 3.14 plugin host, typically **≥4169**).
+
+Package folder / Package Control name: **`kubetools`** (must match for Settings menus).
+
+## Commands (Cmd+Shift+P — type `.kube`)
+
+| Command | What it does |
+|---------|----------------|
+| **.kubetools - Compare State** | Pick context → underline differing values **inline** on the manifest |
+| **.kubetools - Clear Compare Overlays** | Remove inline annotations / banner |
+| **.kubetools - Apply Open File** | Context → namespace if needed → dry-run + diff + confirm → `kubectl apply` |
+| **.kubetools - Dry-Run Open File** | Read-only server-side dry-run |
+| **.kubetools - Seal** | Selection → `--raw` encrypt in SealedSecret; no selection → seal Secret → `*-sealedsecret.yaml` |
+| **.kubetools - Unseal** | Offline decrypt selection with stage private key → scratch tab (`DO-NOT-COMMIT`, read-only) |
+
+## Seal stages
+
+Configure `stages` (cert + optional private key) under Kubetools settings.
+If `stages` is empty, User `Kubeseal.sublime-settings` stages are used (migration).
+
+After a full-file seal, you are offered **Compare State** on the sealed file.
+Overwriting an existing `*-sealedsecret.yaml` requires confirmation (previous → `.bckp-*`).
+
+### Compare labels
+
+Live values appear on the line **below** each diff (smaller font), not as a
+jagged right-hand column (Sublime cannot do that reliably).
+
+- `live | *** | copy` — cluster has a value (Secret fields redacted); template differs
+- `live | absent` — key is not on the live object
+- Secrets: `stringData.*` is matched to live `data.*`
+
+## Read-only guarantee (Compare / Diff / Dry-Run)
+
+These modes **cannot** mutate the open file, buffer text (only overlays), or the
+cluster without `--dry-run`. Temp files stay under the system temp dir.
+
+**Apply** and **Seal** are the only modes that write (cluster / sealed sibling).
+
+## Apply safety locks (cannot be disabled)
+
+- Always pass explicit `--context`
+- Always `kubectl apply --dry-run=server` before real apply
+- Always require quick-panel confirmation
+- Never `--force` / `--force-conflicts`
+- Frozen buffer snapshot via temp file (`0600`)
+- One interactive flow at a time
+
+## Keyboard (default chords)
+
+Press **ctrl+k**, then (only in **YAML / JSON** buffers — avoids stealing ST’s
+global `ctrl+k` chords):
+
+| Chord | Action |
+|-------|--------|
+| **h** | Hub (all actions) |
+| **c** | Compare State |
+| **d** | Dry-Run |
+| **a** | Apply (still full confirms) |
+| **s** / **u** | Seal / Unseal |
+| **n** / **p** | Next / Prev diff |
+| **y** | Copy live under caret |
+| **x** | Clear overlays |
+| **,** | Settings |
+
+Remap: Preferences → Package Settings → Kubetools → Key Bindings.
+
+Panels: **Enter** confirms highlighted item, **Esc** cancels. On dangerous apply,
+**Cancel is listed first** so accidental Enter aborts.
+
+## Context preselect (safe)
+
+When the open file path contains a cluster folder (e.g.
+`environments/dev/my-cluster/...`), that kubectl context is **highlighted** in the
+context quick panel. The panel is **always** shown — never skipped.
+
+- Apply still requires dry-run + confirm (+ type-to-confirm on prod-like names)
+- Compare / Dry-Run never mutate the cluster or the open file
+- Settings: `guess_context_from_path`, `context_path_aliases`
+
+**Preferences → Package Settings → Kubetools → Settings** (Default | User), or
+Command Palette → `.kubetools - Settings`.
+
+Put your seal `stages` (cert / private key paths) in **Settings – User**.
+If you still have `User/Kubeseal.sublime-settings`, opening Kubetools Settings
+once migrates those stages automatically.
+
+## Requirements
+
+- Sublime Text 4 (Build 4205+)
+- `kubectl` on PATH (or set `kubectl_path`)
+- `kubeseal` on PATH for Seal/Unseal (or set `kubeseal_path`)

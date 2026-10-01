@@ -8,6 +8,8 @@ import threading
 import sublime
 import sublime_plugin
 
+# Sublime Text 4 / Python 3.14 (see package .python-version)
+
 
 # Common cluster-scoped kinds (Kind only). Unknown kinds are treated as
 # namespaced so the plugin asks for a namespace when metadata.namespace is missing.
