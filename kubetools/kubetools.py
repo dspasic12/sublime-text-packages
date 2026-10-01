@@ -906,14 +906,40 @@ def _on_compare_navigate(view, href):
         return
 
 
-def _build_compare_banner(context, n_diffs, n_issues, n_unmapped):
+def _build_compare_banner(
+    context, n_diffs, n_issues, n_unmapped, n_missing=0
+):
+    """
+    Top-of-buffer compare summary.
+
+    When live resources are missing and there are no field diffs, say so
+    explicitly — "0 diff(s)" is misleading for a resource that is not on
+    the cluster at all.
+    """
     parts = [
         "<body style='margin:6px 10px;font-size:0.9rem;padding:4px 0;"
         "border-bottom:1px solid color(var(--foreground) alpha(0.15))'>",
         "<strong style='color:#61afef'>Kubetools compare</strong>",
         " <span style='color:#5c6370'>@ {}</span>".format(_h_mini(context)),
-        " · <span style='color:#e5c07b'>{} diff(s)</span>".format(n_diffs),
     ]
+    if n_missing and n_diffs == 0:
+        if n_missing == 1:
+            miss_label = "does not exist on cluster"
+        else:
+            miss_label = "{} resources not on cluster".format(n_missing)
+        parts.append(
+            " · <span style='color:#e06c75'>{}</span>".format(miss_label)
+        )
+    else:
+        parts.append(
+            " · <span style='color:#e5c07b'>{} diff(s)</span>".format(n_diffs)
+        )
+        if n_missing:
+            parts.append(
+                " · <span style='color:#e06c75'>{} not on cluster</span>".format(
+                    n_missing
+                )
+            )
     if n_issues:
         parts.append(
             " · <a href='focus-issues' style='color:#e06c75'>"
@@ -2089,6 +2115,7 @@ class _KubetoolsFlow(object):
         total_issues = 0
         unmapped = 0
         matched_resources = 0
+        missing_on_cluster = 0
 
         for res in self.resources:
             label = _resource_label(res, self.chosen_namespace)
@@ -2133,8 +2160,11 @@ class _KubetoolsFlow(object):
                 msg = (err or out or "").strip()
                 total_issues += 1
                 if _is_resource_not_found(msg):
+                    missing_on_cluster += 1
                     safety_lines.append(
-                        "{}: not found on cluster (nothing to compare)".format(label)
+                        "{}: does not exist on cluster (nothing to compare)".format(
+                            label
+                        )
                     )
                 else:
                     safety_lines.append(
@@ -2194,7 +2224,11 @@ class _KubetoolsFlow(object):
             )
 
         banner = _build_compare_banner(
-            self.context, len(overlay_items), len(safety_lines), unmapped
+            self.context,
+            len(overlay_items),
+            len(safety_lines),
+            unmapped,
+            n_missing=missing_on_cluster,
         )
 
         def done():
@@ -2231,12 +2265,25 @@ class _KubetoolsFlow(object):
             else:
                 _apply_compare_overlays(view, overlay_items, banner, self.context)
                 # Keep caret / scroll where the user left them (no jump to first diff)
-                sublime.status_message(
-                    "Kubetools: {} diff(s) — next/prev: ctrl+k,ctrl+n/p · "
-                    "copy: ctrl+k,ctrl+y · clear: ctrl+k,ctrl+x".format(
-                        len(overlay_items)
+                if missing_on_cluster and not overlay_items:
+                    if missing_on_cluster == 1:
+                        status = (
+                            "Kubetools: resource does not exist on cluster"
+                        )
+                    else:
+                        status = (
+                            "Kubetools: {} resources do not exist on cluster".format(
+                                missing_on_cluster
+                            )
+                        )
+                    sublime.status_message(status)
+                else:
+                    sublime.status_message(
+                        "Kubetools: {} diff(s) — next/prev: ctrl+k,ctrl+n/p · "
+                        "copy: ctrl+k,ctrl+y · clear: ctrl+k,ctrl+x".format(
+                            len(overlay_items)
+                        )
                     )
-                )
 
             win = view.window()
             if win:
