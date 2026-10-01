@@ -22,14 +22,26 @@ class TestCommon(unittest.TestCase):
         self.assertIsNone(ktc.validate_binary_path("kubectl", "kubectl"))
 
     def test_dangerous_name(self):
-        self.assertTrue(ktc.is_dangerous_name("prod-eu1"))
+        self.assertTrue(ktc.is_dangerous_name("prod-a"))
         self.assertTrue(ktc.is_dangerous_name("my-production-cluster"))
         self.assertFalse(ktc.is_dangerous_name("dev-cluster"))
 
     def test_scrub_secret_text(self):
-        msg = ktc.scrub_secret_text("Bearer supersecrettoken123 failed", ["supersecrettoken123"])
+        msg = ktc.scrub_secret_text(
+            "Bearer supersecrettoken123 failed", ["supersecrettoken123"]
+        )
         self.assertNotIn("supersecrettoken123", msg)
         self.assertIn("[redacted]", msg)
+        msg2 = ktc.scrub_secret_text(
+            "tok=perm:user.ABCDEFG.xyz Authorization: Bearer abc"
+        )
+        self.assertNotIn("perm:user.ABCDEFG.xyz", msg2)
+        self.assertNotIn("Bearer abc", msg2)
+        self.assertIn("perm:[redacted]", msg2)
+        self.assertIn("[redacted]", msg2)
+        msg3 = ktc.scrub_secret_text("token glpat-ABCDEFGHIJKLMN end")
+        self.assertNotIn("glpat-ABCDEFGHIJKLMN", msg3)
+        self.assertIn("glpat-[redacted]", msg3)
 
     def test_write_temp_under_tmpdir(self):
         path = ktc.write_temp_under_tmpdir("kind: Pod\n", suffix=".yaml")
@@ -56,14 +68,14 @@ class TestPathContextGuess(unittest.TestCase):
         "dev-clusterlab",
         "test-cluster",
         "prod-cluster",
-        "prod-core-eu1",
-        "admin@sentry",
+        "prod-core-a",
+        "admin@lab",
     ]
 
     def test_exact_segment_prefers_dev_cluster_not_devlab(self):
         path = "/home/user/gitops/environments/dev/dev-cluster/apps/foo/bar.yaml"
         ordered, selected, reasons = ktc.rank_contexts_for_path(
-            self.CONTEXTS, path, current_context="admin@sentry"
+            self.CONTEXTS, path, current_context="admin@lab"
         )
         self.assertEqual(ordered[selected], "dev-cluster")
         self.assertIn("dev-cluster", reasons)
@@ -86,13 +98,13 @@ class TestPathContextGuess(unittest.TestCase):
         self.assertTrue(ktc.is_dangerous_name(ordered[selected]))
 
     def test_alias(self):
-        path = "/repo/environments/prod/prod-eu1/apps/x.yaml"
-        contexts = ["org-prod-eu1", "dev-cluster"]
+        path = "/repo/environments/prod/prod-a/apps/x.yaml"
+        contexts = ["org-prod-a", "dev-cluster"]
         ordered, selected, reasons = ktc.rank_contexts_for_path(
-            contexts, path, aliases={"prod-eu1": "org-prod-eu1"}
+            contexts, path, aliases={"prod-a": "org-prod-a"}
         )
-        self.assertEqual(ordered[selected], "org-prod-eu1")
-        self.assertIn("alias", reasons["org-prod-eu1"])
+        self.assertEqual(ordered[selected], "org-prod-a")
+        self.assertIn("alias", reasons["org-prod-a"])
 
     def test_no_match_falls_back_to_current(self):
         path = "/tmp/unrelated/file.yaml"

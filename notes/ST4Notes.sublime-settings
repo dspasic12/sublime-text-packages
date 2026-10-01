@@ -12,7 +12,7 @@
 
     // Permanent API token. Prefer setting this only in
     // Packages/User/ST4Notes.sublime-settings — never commit a real token.
-    // YouTrack → Profile → Authentication → New token
+    // Keep this package default empty. YouTrack → Profile → Authentication → New token
     // Scopes: Read Issue, Create Issue, Update Issue, Create Comment
     "youtrack_token": "",
 
@@ -20,6 +20,7 @@
     "gitlab_base": "",
 
     // GitLab personal access token (api / read_api). User settings only — never commit.
+    // Keep this package default empty.
     "gitlab_token": "",
 
     // Default YouTrack project shortName (issue create / import / TODO list).

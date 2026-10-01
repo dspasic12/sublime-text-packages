@@ -28,7 +28,7 @@ contexts:
       scope: markup.heading.stnotes
 
     # ==========================================================================
-    # Ticket-ID section headers:  # INFRA-1234:
+    # Ticket-ID section headers:  # PROJ-1234:
     # MUST come before the generic header rule below.
     # Uses storage.type -> teal/blue in all themes
     # ==========================================================================
@@ -97,7 +97,7 @@ contexts:
       scope: constant.numeric.stnotes
 
     # ------------------------------------------------------------------
-    # Inline ticket IDs: INFRA-1234  ABC-99
+    # Inline ticket IDs: PROJ-1234  ABC-99
     # Uses storage.type -> teal/blue (same as ticket headers, consistent)
     # ------------------------------------------------------------------
     - match: '\b({{ticket_id}})\b'

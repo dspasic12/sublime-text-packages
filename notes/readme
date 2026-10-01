@@ -12,7 +12,7 @@ Stores a single plain-text notes file (`ST4Notes` syntax), with commands to add/
 | **Notes: Commit Description** | Commit the Add description buffer (also **Cmd/Ctrl+Enter**) |
 | **Notes: Edit** | Open the notes file |
 | **Notes: Search** | Quick-panel search over tickets / TODO / OPS |
-| **Notes: Open Issue** | Open a ticket in the browser (or list YouTrack issues) |
+| **Notes: Open Issue** | All issues → pick assignee → palette list (type to filter live, Enter opens) |
 | **Notes: Weekly Summary** | Scratch view of recent activity (sorted by **date**, not time) |
 | **Notes: Weekly Search** | Search within the weekly window |
 | **Notes: Create Issue** | Create a YouTrack issue (optional stage sub-tasks) |
@@ -59,10 +59,14 @@ Preferences → Package Settings → ST4Notes (keep tokens in **User** settings 
 - HTTPS-only YouTrack / GitLab bases; private/loopback/CGNAT hosts rejected  
 - Hover / navigate opens **https:// only** (rejects `javascript:` / `file:` / plain http)  
 - API calls refuse HTTP redirects (Bearer / PRIVATE-TOKEN not forwarded)  
+- UI / console errors scrub configured tokens plus `perm:` / `glpat-` / Authorization headers  
+- API error dialogs omit full request URLs and raw response dumps  
 - Notes read-modify-write serialized (`_notes_io_lock`); atomic write + mode `0600`  
-- Notes file hard cap 8 MiB (read/write)  
-- Package defaults ship empty tokens  
+- Notes file hard cap 8 MiB (read/write); `notes_path_jail` keeps the file under home by default  
+- Package defaults ship **empty** tokens — put real tokens only in `Packages/User/ST4Notes.sublime-settings`  
 - DONE / REVIEW YouTrack state changes require confirm (single-line only)
+
+Do **not** minify / bytecode-obfuscate this package: Sublime loads plain `.py` from the package folder; shipping secrets-free source is the safety model.
 
 ## Install / live symlink
 

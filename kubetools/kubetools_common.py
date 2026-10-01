@@ -237,10 +237,13 @@ def scrub_secret_text(message, secrets=None):
     for s in secrets or []:
         if s and isinstance(s, str) and len(s) >= 8:
             msg = msg.replace(s, "[redacted]")
-    # Bearer / PRIVATE-TOKEN style
+    # Bearer / PRIVATE-TOKEN / Authorization style
     msg = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", msg)
     msg = re.sub(r"(?i)(private-token:\s*)\S+", r"\1[redacted]", msg)
     msg = re.sub(r"(?i)(authorization:\s*)\S+", r"\1[redacted]", msg)
+    # Common PAT shapes if they leak into stderr
+    msg = re.sub(r"(?i)\bperm:[A-Za-z0-9._\-+=/]+", "perm:[redacted]", msg)
+    msg = re.sub(r"(?i)\bglpat-[A-Za-z0-9_\-]+", "glpat-[redacted]", msg)
     return msg
 
 

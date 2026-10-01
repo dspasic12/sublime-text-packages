@@ -1,3 +1,15 @@
 .DS_Store
 *.sublime-workspace
 .sublime/
+
+# Never commit local credentials / keys into the package repo
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Accidental User-pane copies
+**/User/
+**/*-User.sublime-settings

@@ -39,7 +39,7 @@
     // user must always confirm. Dangerous contexts still require type-to-confirm.
     "guess_context_from_path": true,
 
-    // Optional map when folder name ≠ context name, e.g. { "prod-eu1": "org-prod-eu1" }
+    // Optional map when folder name ≠ context name, e.g. { "prod-a": "org-prod-a" }
     "context_path_aliases": {},
 
     "warn_unsaved_buffer": true,

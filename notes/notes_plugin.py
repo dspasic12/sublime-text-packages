@@ -61,14 +61,30 @@ def _assert_notes_path_in_jail(abs_path: str) -> None:
 
 
 def _scrub_error_text(message: object) -> str:
-    """Never surface API tokens in UI / logs."""
+    """
+    Never surface API tokens in UI / logs.
+
+    Scrubs configured tokens plus common YouTrack / GitLab token shapes so a
+    leaked header or exception body cannot echo credentials into dialogs or the
+    Sublime console.
+    """
     msg = "" if message is None else str(message)
     for tok in (_youtrack_token(), _gitlab_token()):
-        if tok and len(tok) >= 8:
+        if tok and isinstance(tok, str) and len(tok) >= 8:
             msg = msg.replace(tok, "[redacted]")
     msg = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", msg)
     msg = re.sub(r"(?i)(private-token:\s*)\S+", r"\1[redacted]", msg)
+    msg = re.sub(r"(?i)(authorization:\s*)\S+", r"\1[redacted]", msg)
+    # YouTrack permanent tokens / GitLab PATs if echoed outside settings
+    msg = re.sub(r"(?i)\bperm:[A-Za-z0-9._\-+=/]+", "perm:[redacted]", msg)
+    msg = re.sub(r"(?i)\bglpat-[A-Za-z0-9_\-]+", "glpat-[redacted]", msg)
     return msg
+
+
+def _safe_log(level: str, fmt: str, *args) -> None:
+    """Log with token scrubbing applied to every interpolated argument."""
+    scrubbed = tuple(_scrub_error_text(a) for a in args)
+    getattr(log, level, log.warning)(fmt, *scrubbed)
 
 
 def _notes_file() -> str:
@@ -83,12 +99,17 @@ def _notes_file() -> str:
     except OSError:
         return os.path.abspath(abs_path)
 
+
 def _error_message(message: object) -> None:
     sublime.error_message(_scrub_error_text(message))
 
 
 def _status_message(message: object) -> None:
     sublime.status_message(_scrub_error_text(message))
+
+
+def _message_dialog(message: object) -> None:
+    sublime.message_dialog(_scrub_error_text(message))
 
 
 _TICKET_RE               = re.compile(r"^[A-Z0-9][A-Z0-9_\-]{0,63}$")
@@ -869,7 +890,8 @@ def _yt_request(
                 err_body = exc.read().decode("utf-8", errors="replace")
             except Exception:
                 err_body = ""
-            log.warning(
+            _safe_log(
+                "warning",
                 "YouTrack API HTTP %s for %s %s  body: %s",
                 exc.code, method, path, err_body[:200],
             )
@@ -878,13 +900,14 @@ def _yt_request(
         except (URLError, OSError, json.JSONDecodeError) as exc:
             if attempt < retries:
                 wait = 2 ** attempt
-                log.warning(
+                _safe_log(
+                    "warning",
                     "YouTrack API %s %s transient error (attempt %d/%d): %s",
                     method, path, attempt + 1, retries + 1, exc,
                 )
                 time.sleep(wait)
                 continue
-            log.warning("YouTrack API %s %s error: %s", method, path, exc)
+            _safe_log("warning", "YouTrack API %s %s error: %s", method, path, exc)
             return None
 
     return None
@@ -1012,8 +1035,6 @@ def _fetch_issues_list(
         f"&$top={top}"
     )
 
-    log.debug("ST4Notes fetch_issues_list URL: %s", url)
-
     timeout = _api_timeout()
     retries = _api_max_retries()
     ctx     = _ssl_context()
@@ -1052,15 +1073,16 @@ def _fetch_issues_list(
             except Exception:
                 err_body = ""
             if exc.code == 400:
-                log.warning(
-                    "ST4Notes fetch_issues_list HTTP 400\n  URL:  %s\n  Body: %s",
-                    url, err_body[:400],
+                _safe_log(
+                    "warning",
+                    "ST4Notes fetch_issues_list HTTP 400 query=%r body=%s",
+                    query, err_body[:400],
                 )
+                # Do not put full API URLs / raw bodies in UI dialogs
                 return [], (
                     f"HTTP 400 — query rejected by YouTrack.\n\n"
-                    f"Query:    {query}\n"
-                    f"Full URL: {url}\n\n"
-                    f"Response: {err_body[:300]}"
+                    f"Query: {query}\n\n"
+                    f"Response: {_scrub_error_text(err_body[:300])}"
                 )
             if exc.code == 404:
                 return [], "Project not found (HTTP 404)"
@@ -1072,28 +1094,25 @@ def _fetch_issues_list(
                 time.sleep(2 ** attempt)
                 last_error_msg = f"HTTP {exc.code}"
                 continue
-            last_error_msg = f"HTTP {exc.code}: {err_body[:200]}"
+            last_error_msg = (
+                f"HTTP {exc.code}: {_scrub_error_text(err_body[:200])}"
+            )
 
         except (TimeoutError, URLError, OSError) as exc:
-            last_error_msg = f"Cannot reach YouTrack: {exc}"
+            last_error_msg = _scrub_error_text(f"Cannot reach YouTrack: {exc}")
             if attempt < retries:
                 time.sleep(2 ** attempt)
                 continue
 
         except json.JSONDecodeError as exc:
-            log.warning(
-                "ST4Notes fetch_issues_list: JSON decode failed.\n"
-                "  URL: %s\n"
-                "  Error: %s\n"
-                "  Raw (first 300 chars): %.300s",
-                url, exc, raw,
+            _safe_log(
+                "warning",
+                "ST4Notes fetch_issues_list: JSON decode failed. Error: %s Raw: %.200s",
+                exc, raw,
             )
             return [], (
-                f"JSON decode error from YouTrack.\n\n"
-                f"URL: {url}\n\n"
-                f"Error: {exc}\n\n"
-                f"First 300 chars of response:\n{raw[:300]}\n\n"
-                f"Check the ST4Notes log (View > Show Console) for details."
+                "JSON decode error from YouTrack (response truncated or corrupt).\n"
+                "Check View → Show Console for scrubbed details."
             )
 
     return [], last_error_msg
@@ -1125,6 +1144,39 @@ def _fetch_my_assigned_issues_for_import(project: str) -> tuple[list[dict], str 
         return [], "default_project is not configured"
     query = f"for: me #Unresolved project: {{{project}}}"
     return _fetch_issues_list(query, top=200)
+
+
+def _issue_search_blob(issue: dict) -> str:
+    """Plain text used for explicit substring filtering (not ST fuzzy)."""
+    parsed = _parse_youtrack_issue(issue) if issue else {}
+    parts = [
+        issue.get("idReadable") or "",
+        issue.get("summary") or "",
+        parsed.get("state") or "",
+        parsed.get("assignee") or "",
+        parsed.get("assignee_login") or "",
+    ]
+    return " ".join(parts).casefold()
+
+
+def _filter_issues_by_text(issues: list[dict], query: str) -> list[dict]:
+    """
+    Narrow issues with explicit substring match.
+    Every whitespace-separated token must appear somewhere in id/summary/state/assignee.
+    Empty query → unchanged list.
+    """
+    q = (query or "").strip().casefold()
+    if not q:
+        return list(issues)
+    tokens = [t for t in q.split() if t]
+    if not tokens:
+        return list(issues)
+    out: list[dict] = []
+    for issue in issues:
+        blob = _issue_search_blob(issue)
+        if all(tok in blob for tok in tokens):
+            out.append(issue)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1197,6 +1249,143 @@ def _fetch_all_project_issues(project: str) -> tuple[list[dict], str | None]:
     proj_token = f"{{{project}}}" if " " in project else project
     query = f"project: {proj_token} #Unresolved"
     return _fetch_issues_list(query, top=500)
+
+
+def _yt_query_token(value: str) -> str:
+    """Brace-wrap a YouTrack query token when it contains spaces / special chars."""
+    v = (value or "").strip()
+    if not v:
+        return v
+    if any(ch in v for ch in " \t:{}()"):
+        return "{" + v.replace("}", "") + "}"
+    return v
+
+
+def _fetch_issues_assigned_to(
+    project: str, login: str
+) -> tuple[list[dict], str | None]:
+    """
+    Unresolved issues in project assigned to ``login`` (YouTrack ``for:``).
+    """
+    if not project:
+        return [], "default_project is not configured"
+    login = (login or "").strip().lstrip("@")
+    if not login:
+        return _fetch_all_project_issues(project)
+    proj_token = _yt_query_token(project)
+    login_token = _yt_query_token(login)
+    query = f"project: {proj_token} #Unresolved for: {login_token}"
+    return _fetch_issues_list(query, top=500)
+
+
+# ---------------------------------------------------------------------------
+# YouTrack — users (for @assignee filter)
+# ---------------------------------------------------------------------------
+
+_users_cache_lock = threading.Lock()
+_USERS_CACHE: list[dict] | None = None
+
+
+def _invalidate_users_cache() -> None:
+    global _USERS_CACHE
+    with _users_cache_lock:
+        _USERS_CACHE = None
+
+
+def _assignees_from_issues(issues: list[dict] | None) -> list[dict]:
+    """
+    Unique assignees found on the given issues (project-scoped).
+    Returns list of {login, fullName} sorted by login.
+    """
+    by_key: dict[str, dict] = {}
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        parsed = _parse_youtrack_issue(issue)
+        login = (parsed.get("assignee_login") or "").strip()
+        if not login:
+            continue
+        full = (parsed.get("assignee") or "").strip()
+        if full.lower() == login.lower():
+            full = ""
+        key = login.lower()
+        prev = by_key.get(key)
+        if prev is None:
+            by_key[key] = {"login": login, "fullName": full}
+        elif full and not prev.get("fullName"):
+            prev["fullName"] = full
+    users = list(by_key.values())
+    users.sort(key=lambda x: (x["login"] or "").lower())
+    return users
+
+
+def _fetch_youtrack_users(
+    query: str = "",
+) -> tuple[list[dict], str | None]:
+    """
+    List YouTrack users (instance-wide) for typed-login resolve fallback.
+    Prefer ``_assignees_from_issues`` for project-scoped assignee panels.
+    Returns list of {login, fullName}, error.
+    """
+    global _USERS_CACHE
+    q = (query or "").strip().lstrip("@").lower()
+
+    with _users_cache_lock:
+        cached = list(_USERS_CACHE) if _USERS_CACHE is not None else None
+
+    if cached is None:
+        # Prefer active users; fall back to bare /users if banned filter fails.
+        result = _yt_request(
+            "GET",
+            "/users",
+            params="fields=login,fullName,banned&$top=200",
+        )
+        if result is None or _is_api_error(result):
+            result = _yt_request(
+                "GET",
+                "/users",
+                params="fields=login,fullName&$top=200",
+            )
+        if result is None:
+            return [], "Could not load YouTrack users (check token / network)"
+        if _is_api_error(result):
+            desc = ""
+            if isinstance(result, dict):
+                desc = str(result.get("description") or result.get("status") or "")
+            return [], desc or "YouTrack users request failed"
+        if not isinstance(result, list):
+            return [], "Unexpected users response from YouTrack"
+
+        users: list[dict] = []
+        for u in result:
+            if not isinstance(u, dict):
+                continue
+            if u.get("banned") is True:
+                continue
+            login = (u.get("login") or "").strip()
+            if not login or login.startswith("guest"):
+                continue
+            users.append(
+                {
+                    "login": login,
+                    "fullName": (u.get("fullName") or "").strip(),
+                }
+            )
+        users.sort(key=lambda x: (x["login"] or "").lower())
+        with _users_cache_lock:
+            _USERS_CACHE = users
+        cached = users
+
+    if not q:
+        return list(cached), None
+
+    filtered = [
+        u
+        for u in cached
+        if q in (u.get("login") or "").lower()
+        or q in (u.get("fullName") or "").lower()
+    ]
+    return filtered, None
 
 
 # ---------------------------------------------------------------------------
@@ -2653,7 +2842,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
             except Exception as exc:
                 log.warning("Could not write CREATED entry: %s", exc)
             sublime.set_clipboard(url)
-            sublime.message_dialog(
+            _message_dialog(
                 f"Issue created: {ticket_id}\nURL: {url}\n\nURL copied to clipboard."
             )
             sublime.status_message(f"Notes: created {ticket_id}")
@@ -2763,7 +2952,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
                     link_note = " (linked as subtask)" if linked else " (standalone)"
                     msg_lines.append(f"  [{stage}]  {cid_or_err}{link_note}")
 
-            sublime.message_dialog("\n".join(msg_lines))
+            _message_dialog("\n".join(msg_lines))
             n_ok = len(ok_children)
             sublime.status_message(
                 f"Notes: {_parent_id_snap} + {n_ok}/{len(stages)} stage(s) created"
@@ -3073,7 +3262,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
         if yt_configured:
             panel_items.append([
                 f"[ All issues ({project}) ]",
-                "YouTrack: all unresolved issues",
+                "YouTrack: pick assignee, then optional text filter",
             ])
             self._tickets.append(self._ALL_ISSUES)
 
@@ -3146,23 +3335,306 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
         sublime.status_message(f"Notes: opened {url}")
 
     # ------------------------------------------------------------------
-    # All issues — quick panel
+    # All issues — assignee filter, optional text narrow, then panel
     # ------------------------------------------------------------------
+
+    _ALL_ASSIGNEE_ANY = "__all_assignee_any__"
+    _ALL_ASSIGNEE_TYPE = "__all_assignee_type__"
+    _ALL_ASSIGNEE_ME = "__all_assignee_me__"
+    _REFINE_FILTER = "__refine_filter__"
 
     def _show_all_issues(self) -> None:
         project = _default_project()
         if not project:
             sublime.status_message("Notes: default_project is not set.")
             return
-        sublime.status_message(f"Notes: fetching all issues for {project}...")
-        sublime.set_timeout_async(lambda: self._fetch_all(project), 0)
+        sublime.status_message(
+            f"Notes: loading {project} issues for assignee filter..."
+        )
+        sublime.set_timeout_async(lambda: self._load_assignee_filter(project), 0)
 
-    def _fetch_all(self, project: str) -> None:
-        issues, err_msg = _fetch_all_project_issues(project)
-        sublime.set_timeout(lambda: self._show_panel_all(issues, project, err_msg), 0)
+    def _load_assignee_filter(self, project: str) -> None:
+        # Load project issues once — assignees come from those issues only
+        # (not the whole YouTrack user directory).
+        issues, err = _fetch_all_project_issues(project)
+        users = _assignees_from_issues(issues)
+        me_login, me_name = _fetch_current_user_login()
+        sublime.set_timeout(
+            lambda: self._show_assignee_filter_panel(
+                project, users, err, me_login, me_name, issues=issues
+            ),
+            0,
+        )
 
-    def _show_panel_all(
-        self, issues: list[dict], project: str, err_msg: str | None
+    def _show_assignee_filter_panel(
+        self,
+        project: str,
+        users: list[dict],
+        err: str | None,
+        me_login: str | None,
+        me_name: str | None,
+        issues: list[dict] | None = None,
+    ) -> None:
+        if err and not issues:
+            _error_message(
+                f"Notes: could not load {project} issues for assignee filter\n\n"
+                f"{err}"
+            )
+            return
+
+        self._assignee_filter_project = project
+        self._assignee_filter_issues = list(issues or [])
+        panel_items: list[list[str]] = []
+        self._assignee_filter_keys: list[str] = []
+
+        panel_items.append([
+            "[ All unresolved ]",
+            f"Any assignee in {project} ({len(self._assignee_filter_issues)})",
+        ])
+        self._assignee_filter_keys.append(self._ALL_ASSIGNEE_ANY)
+
+        me_on_project = False
+        if me_login:
+            me_lower = me_login.lower()
+            me_on_project = any(
+                (u.get("login") or "").lower() == me_lower for u in users
+            )
+            label = f"me  ({me_login})"
+            if me_name:
+                label = f"me  {me_name} ({me_login})"
+            hint = (
+                "Issues assigned to you"
+                if me_on_project
+                else "No open issues assigned to you in this project"
+            )
+            panel_items.append([label, hint])
+            self._assignee_filter_keys.append(self._ALL_ASSIGNEE_ME)
+
+        panel_items.append([
+            "[ Type login… ]",
+            "Enter a login not listed (queries YouTrack)",
+        ])
+        self._assignee_filter_keys.append(self._ALL_ASSIGNEE_TYPE)
+
+        for u in users:
+            login = u.get("login") or ""
+            full = u.get("fullName") or ""
+            # Login first so typing "jdoe" matches explicitly in the quick panel
+            if full:
+                panel_items.append([login, full])
+            else:
+                panel_items.append([login])
+            self._assignee_filter_keys.append(login)
+
+        n = len(users)
+        sublime.status_message(
+            f"Notes: {n} assignee(s) on open {project} issues"
+        )
+        self.window.show_quick_panel(
+            panel_items,
+            self._on_assignee_filter_select,
+            flags=sublime.MONOSPACE_FONT,
+            selected_index=0,
+            placeholder=(
+                f"{project}: assignees on open issues — type to filter"
+            ),
+        )
+
+    def _on_assignee_filter_select(self, index: int) -> None:
+        if index == -1:
+            return
+        key = self._assignee_filter_keys[index]
+        project = getattr(self, "_assignee_filter_project", "") or _default_project()
+
+        if key == self._ALL_ASSIGNEE_ANY:
+            self._start_fetch_all(project, assignee_login=None, use_cache=True)
+            return
+
+        if key == self._ALL_ASSIGNEE_ME:
+            sublime.status_message("Notes: resolving current user...")
+            sublime.set_timeout_async(
+                lambda: self._resolve_me_and_fetch(project), 0
+            )
+            return
+
+        if key == self._ALL_ASSIGNEE_TYPE:
+            self.window.show_input_panel(
+                "Assignee login (e.g. jdoe):",
+                "",
+                lambda raw: self._on_typed_assignee(project, raw),
+                None,
+                None,
+            )
+            return
+
+        self._start_fetch_all(project, assignee_login=key, use_cache=True)
+
+    def _resolve_me_and_fetch(self, project: str) -> None:
+        login, _name = _fetch_current_user_login()
+        if not login:
+            sublime.set_timeout(
+                lambda: _error_message(
+                    "Notes: could not resolve current YouTrack user "
+                    "(check youtrack_token)."
+                ),
+                0,
+            )
+            return
+        sublime.set_timeout(
+            lambda: self._start_fetch_all(
+                project, assignee_login=login, use_cache=True
+            ),
+            0,
+        )
+
+    def _on_typed_assignee(self, project: str, raw: str) -> None:
+        login = (raw or "").strip().lstrip("@")
+        if not login:
+            sublime.status_message("Notes: no assignee entered — cancelled.")
+            return
+        sublime.status_message(f"Notes: resolving {login}...")
+        sublime.set_timeout_async(
+            lambda: self._resolve_typed_assignee_async(project, login), 0
+        )
+
+    def _resolve_typed_assignee_async(self, project: str, login: str) -> None:
+        # Prefer matches among project assignees already loaded.
+        project_users = _assignees_from_issues(
+            getattr(self, "_assignee_filter_issues", None)
+        )
+        q = login.lower()
+        proj_exact = [
+            u for u in project_users
+            if (u.get("login") or "").lower() == q
+        ]
+        proj_fuzzy = [
+            u for u in project_users
+            if q in (u.get("login") or "").lower()
+            or q in (u.get("fullName") or "").lower()
+        ]
+
+        def done_project(users: list[dict], use_cache: bool) -> None:
+            exact = [
+                u for u in users
+                if (u.get("login") or "").lower() == q
+            ]
+            if exact:
+                self._start_fetch_all(
+                    project,
+                    assignee_login=exact[0]["login"],
+                    use_cache=use_cache,
+                )
+                return
+            if len(users) == 1:
+                self._start_fetch_all(
+                    project,
+                    assignee_login=users[0]["login"],
+                    use_cache=use_cache,
+                )
+                return
+            if users:
+                self._assignee_filter_project = project
+                panel_items: list[list[str]] = []
+                self._assignee_filter_keys = []
+                for u in users:
+                    lg = u.get("login") or ""
+                    full = u.get("fullName") or ""
+                    panel_items.append([lg, full] if full else [lg])
+                    self._assignee_filter_keys.append(lg)
+                self.window.show_quick_panel(
+                    panel_items,
+                    self._on_assignee_filter_select,
+                    flags=sublime.MONOSPACE_FONT,
+                    selected_index=0,
+                    placeholder=f"Matches for {login} — pick one",
+                )
+                return
+            # No directory match — query YouTrack directly with typed login.
+            self._start_fetch_all(
+                project, assignee_login=login, use_cache=False
+            )
+
+        if proj_exact or proj_fuzzy:
+            sublime.set_timeout(
+                lambda: done_project(proj_exact or proj_fuzzy, True), 0
+            )
+            return
+
+        # Fallback: instance user directory (escape hatch for users with
+        # no open issues on this project right now).
+        users, _err = _fetch_youtrack_users(login)
+        sublime.set_timeout(lambda: done_project(users, False), 0)
+
+    def _filter_cached_issues_by_assignee(
+        self, issues: list[dict], assignee_login: str
+    ) -> list[dict]:
+        want = (assignee_login or "").strip().lower()
+        if not want:
+            return list(issues)
+        out: list[dict] = []
+        for issue in issues:
+            parsed = _parse_youtrack_issue(issue)
+            if (parsed.get("assignee_login") or "").strip().lower() == want:
+                out.append(issue)
+        return out
+
+    def _start_fetch_all(
+        self,
+        project: str,
+        assignee_login: str | None,
+        use_cache: bool = True,
+    ) -> None:
+        cached = getattr(self, "_assignee_filter_issues", None)
+        cache_proj = getattr(self, "_assignee_filter_project", None)
+        if (
+            use_cache
+            and isinstance(cached, list)
+            and cache_proj == project
+        ):
+            if assignee_login:
+                issues = self._filter_cached_issues_by_assignee(
+                    cached, assignee_login
+                )
+                label = assignee_login
+            else:
+                issues = list(cached)
+                label = "all"
+            self._after_fetch_all(
+                issues, project, None, assignee_label=label
+            )
+            return
+
+        if assignee_login:
+            sublime.status_message(
+                f"Notes: fetching {project} issues for {assignee_login}..."
+            )
+        else:
+            sublime.status_message(f"Notes: fetching all issues for {project}...")
+        sublime.set_timeout_async(
+            lambda: self._fetch_all(project, assignee_login), 0
+        )
+
+    def _fetch_all(
+        self, project: str, assignee_login: str | None = None
+    ) -> None:
+        if assignee_login:
+            issues, err_msg = _fetch_issues_assigned_to(project, assignee_login)
+        else:
+            issues, err_msg = _fetch_all_project_issues(project)
+        label = assignee_login or "all"
+        sublime.set_timeout(
+            lambda: self._after_fetch_all(
+                issues, project, err_msg, assignee_label=label
+            ),
+            0,
+        )
+
+    def _after_fetch_all(
+        self,
+        issues: list[dict],
+        project: str,
+        err_msg: str | None,
+        assignee_label: str = "all",
     ) -> None:
         if err_msg and not issues:
             _error_message(
@@ -3170,11 +3642,35 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
             )
             return
         if not issues:
-            sublime.status_message(f"Notes: no unresolved issues found in {project}.")
+            sublime.status_message(
+                f"Notes: no unresolved issues in {project} ({assignee_label})."
+            )
+            return
+
+        self._show_panel_all(issues, project, None, assignee_label=assignee_label)
+
+    def _show_panel_all(
+        self,
+        issues: list[dict],
+        project: str,
+        err_msg: str | None,
+        assignee_label: str = "all",
+        text_filter: str = "",  # kept for API compat; unused (palette filters live)
+    ) -> None:
+        if err_msg and not issues:
+            _error_message(
+                f"Notes: could not fetch issues for {project}\n\n{err_msg}"
+            )
+            return
+        if not issues:
+            sublime.status_message(
+                f"Notes: no unresolved issues in {project} ({assignee_label})."
+            )
             return
 
         self._panel_all_issues = issues
-        panel_items: list[list[str]] = []
+        panel_items: list = []
+
         for issue in issues:
             iid     = issue.get("idReadable") or ""
             summary = issue.get("summary") or "(no summary)"
@@ -3182,7 +3678,17 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
             state   = parsed.get("state") or ""
             assign  = parsed.get("assignee") or "Unassigned"
             meta    = f"{state}  |  {assign}" if state else assign
-            panel_items.append([f"{iid}  {summary}", meta])
+            # trigger = only text matched while typing (cmd-palette style).
+            # annotation is display-only — avoids vague fuzzy hits on assignee names.
+            try:
+                panel_items.append(
+                    sublime.QuickPanelItem(
+                        trigger=f"{iid}  {summary}",
+                        annotation=meta,
+                    )
+                )
+            except Exception:
+                panel_items.append([f"{iid}  {summary}", meta])
 
         sublime.status_message("")
         self.window.show_quick_panel(
@@ -3190,11 +3696,16 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
             self._on_all_issues_select,
             flags=sublime.MONOSPACE_FONT,
             selected_index=0,
-            placeholder=f"All unresolved issues in {project}...",
+            placeholder=(
+                f"{project} · {assignee_label} · {len(issues)} issue(s) — "
+                "type to filter, Enter opens"
+            ),
         )
 
     def _on_all_issues_select(self, index: int) -> None:
         if index == -1:
+            return
+        if index < 0 or index >= len(self._panel_all_issues):
             return
         issue = self._panel_all_issues[index]
         iid   = issue.get("idReadable") or ""
@@ -3239,13 +3750,21 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
             return
 
         self._panel_unassigned = issues
-        panel_items: list[list[str]] = []
+        panel_items: list = []
         for issue in issues:
             iid     = issue.get("idReadable") or ""
             summary = issue.get("summary") or "(no summary)"
             parsed  = _parse_youtrack_issue(issue)
             state   = parsed.get("state") or ""
-            panel_items.append([f"{iid}  {summary}", state])
+            try:
+                panel_items.append(
+                    sublime.QuickPanelItem(
+                        trigger=f"{iid}  {summary}",
+                        annotation=state,
+                    )
+                )
+            except Exception:
+                panel_items.append([f"{iid}  {summary}", state])
 
         sublime.status_message("")
         self.window.show_quick_panel(
@@ -3677,7 +4196,7 @@ class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
             except Exception as exc:
                 log.warning("Could not write CREATED entry: %s", exc)
             sublime.set_clipboard(url)
-            sublime.message_dialog(
+            _message_dialog(
                 f"Issue created: {ticket_id}\nURL: {url}\n\nURL copied to clipboard."
             )
             sublime.status_message(f"Notes: created {ticket_id}")
@@ -3795,7 +4314,7 @@ class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
                     link_note = " (linked as subtask)" if linked else " (standalone)"
                     msg_lines.append(f"  [{stage}]  {child_id_or_err}{link_note}")
 
-            sublime.message_dialog("\n".join(msg_lines))
+            _message_dialog("\n".join(msg_lines))
             n_ok = len(ok_children)
             sublime.status_message(
                 f"Notes: {_parent_id_snap} + {n_ok}/{len(stages)} stage(s) created"
@@ -3956,7 +4475,7 @@ def _gitlab_request(path: str, params: str = "") -> dict | list | None:
             if attempt < retries:
                 time.sleep(1 + attempt)
                 continue
-            log.warning("GitLab API error GET %s: %s", path, exc)
+            _safe_log("warning", "GitLab API error GET %s: %s", path, exc)
             return None
     return None
 
@@ -4554,6 +5073,10 @@ def _on_settings_change():
             _index_cache_data = None
     except Exception:
         pass
+    try:
+        _invalidate_users_cache()
+    except Exception:
+        pass
 
 
 def plugin_loaded():
@@ -4569,5 +5092,26 @@ def plugin_unloaded():
     try:
         s = sublime.load_settings(_SETTINGS_FILE)
         s.clear_on_change(_SETTINGS_LISTENER_KEY)
+    except Exception:
+        pass
+    # Drop in-memory caches (may hold issue summaries / assignee names)
+    try:
+        _invalidate_notes_cache()
+    except Exception:
+        pass
+    try:
+        global _index_cache_mtime, _index_cache_data
+        with _index_cache_lock:
+            _index_cache_mtime = None
+            _index_cache_data = None
+    except Exception:
+        pass
+    try:
+        _invalidate_users_cache()
+    except Exception:
+        pass
+    try:
+        with _current_user_lock:
+            _CURRENT_USER_CACHE.clear()
     except Exception:
         pass
