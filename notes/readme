@@ -50,6 +50,7 @@ Preferences → Package Settings → ST4Notes (keep tokens in **User** settings 
 | `notes_file` | Default `~/Documents/ST4Notes` |
 | `youtrack_base` / `youtrack_token` | YouTrack |
 | `gitlab_base` / `gitlab_token` | GitLab MR hover (`read_api`) |
+| `notes_path_jail` | `notes_file` must stay under this dir (default `~`) |
 | `note_max_lines` / `note_max_line_len` | Multi-line Add limits (50 / 500) |
 | `post_comments` | Default `false` |
 
@@ -74,5 +75,6 @@ ln -s "/path/to/sublime-text-packages/notes" \
 
 ## Requirements
 
-- Sublime Text 4  
+- Sublime Text 4 with **Python 3.14** plugin host (see `.python-version`; build ≥4169)
+- Package folder name must be **`notes`** (Package Control name aligned; Settings menus use `${packages}/notes/…`)
 - Optional YouTrack + GitLab tokens for API features

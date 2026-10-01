@@ -1,0 +1,9 @@
+Kubetools 1.1.0
+===============
+
+- Package Control name aligned to folder `kubetools` (Settings menus work after PC install)
+- Key chords scoped to YAML/JSON (no longer steal global ctrl+k)
+- Shared operation gate for apply + seal; daemon background workers
+- plugin_loaded / plugin_unloaded settings lifecycle
+- Removed dead Diff-mode / unused helpers
+- Requires Sublime Text build with Python 3.14 plugin host (.python-version)

@@ -1,7 +1,9 @@
 ST4Notes Plugin for Sublime Text
 ================================
 
-Thank you for installing ST4Notes (package folder: notes).
+Thank you for installing ST4Notes (Package Control / folder name: notes).
+
+Requires Sublime Text 4 with the Python 3.14 plugin host.
 
 Quick start:
 1. Preferences → Package Settings → ST4Notes → Settings – User

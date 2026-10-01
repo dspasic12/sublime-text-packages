@@ -1,0 +1,13 @@
+Kubetools Plugin for Sublime Text
+=================================
+
+Requires: Sublime Text 4 with **Python 3.14** plugin host (see `.python-version`).
+Install folder name must be `kubetools` (matches Package Control name).
+
+Keyboard (YAML/JSON buffers): ctrl+k then h Hub · c Compare · d Dry-Run · a Apply ·
+s Seal · n/p next/prev diff · y copy live · x clear · , settings
+
+Command Palette: type `.kube`
+
+Context panel always shown (path may preselect). Apply still dry-runs + confirms.
+Seal stage panel always shown.

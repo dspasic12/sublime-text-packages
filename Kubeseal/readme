@@ -1,30 +1,15 @@
-Configuration:
-1. Preferences → Package Settings → Kubeseal → Settings
-2. Fill "stages" with per-cluster cert_path / private_key_path (see defaults)
-3. Run "Kubeseal: Validate Configuration"
+# Kubeseal (deprecated)
 
-Usage:
-- Encrypt selection or whole file → Ctrl+K, Ctrl+E
-  → quick panel asks which stage key to use
-  → no selection: seals Secret template → sibling *-sealedsecret.yaml
-  → selection: raw --raw encrypt only inside a SealedSecret (encryptedData)
-- Decrypt selection → Ctrl+K, Ctrl+D
-  → asks which stage private key to use
-  → Secret.data values are auto base64-decoded
+Seal / unseal is now part of **Kubetools**.
 
-Safety:
-- Refuses full-file re-seal of an existing SealedSecret
-- Refuses raw string encrypt unless the open buffer is kind: SealedSecret
-  (plain Secret → clear selection and full-file seal instead)
-- Refuses empty Secret templates (no data / stringData values)
-- Caps input size (2 MiB) and subprocess timeout (5–300s)
-- If *-sealedsecret.yaml already exists: auto-rename to .bckp-<oldName> then
-  atomic write (temp + replace; timestamp suffix if .bckp- already present)
-- Private keys that are group/world-readable are rejected (chmod 600)
-- Decrypt confirms non-ciphertext selections and prod-named stages
-- Reseal / YAML-decrypt warnings use a **quick panel**
-  (same UI family as Cmd+Shift+P — keyboard: arrows + Enter / Esc)
-- Decrypt opens a scratch buffer (harder to accidentally commit plaintext)
-- Concurrent encrypt/decrypt operations are blocked
+Use:
+- `.kubetools - Seal (selection or file)`
+- `.kubetools - Unseal Selected Text`
 
-note: if namespace / secret name is missing from the file metadata, you will be prompted.
+Configure `stages` in **Preferences → Package Settings → Kubetools**.
+
+If this package is still installed, its palette commands forward to Kubetools
+and show a deprecation status message. You can remove the Kubeseal package
+after migrating User settings (`stages`) into `Kubetools.sublime-settings`.
+
+Requirements: Kubetools package + `kubeseal` on PATH.

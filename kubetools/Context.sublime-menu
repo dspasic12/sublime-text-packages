@@ -1,0 +1,42 @@
+[
+    {
+        "caption": ".kubetools - Hub…",
+        "command": "kubetools_hub"
+    },
+    {
+        "caption": ".kubetools - Compare State",
+        "command": "kubetools_compare_state"
+    },
+    {
+        "caption": ".kubetools - Next Diff",
+        "command": "kubetools_next_diff"
+    },
+    {
+        "caption": ".kubetools - Prev Diff",
+        "command": "kubetools_prev_diff"
+    },
+    {
+        "caption": ".kubetools - Copy Live Under Caret",
+        "command": "kubetools_copy_live_under_caret"
+    },
+    {
+        "caption": ".kubetools - Clear Compare Overlays",
+        "command": "kubetools_clear_compare"
+    },
+    {
+        "caption": ".kubetools - Apply This File",
+        "command": "kubetools_open_file"
+    },
+    {
+        "caption": ".kubetools - Dry-Run This File",
+        "command": "kubetools_dry_run_open_file"
+    },
+    {
+        "caption": ".kubetools - Seal (selection or file)",
+        "command": "kubetools_seal"
+    },
+    {
+        "caption": ".kubetools - Unseal Selection",
+        "command": "kubetools_unseal"
+    }
+]
