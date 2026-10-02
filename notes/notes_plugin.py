@@ -1251,6 +1251,118 @@ def _fetch_all_project_issues(project: str) -> tuple[list[dict], str | None]:
     return _fetch_issues_list(query, top=500)
 
 
+# ---------------------------------------------------------------------------
+# YouTrack — my recently resolved / closed issues
+# ---------------------------------------------------------------------------
+
+# Finished-state keywords (case-insensitive substring match on State name).
+# Used as a client-side safety net when #Resolved is unavailable / too broad.
+_FINISHED_STATE_HINTS: tuple[str, ...] = (
+    "done",
+    "closed",
+    "resolved",
+    "fixed",
+    "won't fix",
+    "wont fix",
+    "duplicate",
+    "obsolete",
+    "cancelled",
+    "canceled",
+    "rejected",
+    "cannot reproduce",
+    "complete",
+    "finished",
+    "declined",
+)
+
+
+def _is_finished_state(state: str) -> bool:
+    s = (state or "").strip().lower()
+    if not s:
+        return False
+    return any(h in s for h in _FINISHED_STATE_HINTS)
+
+
+def _issue_updated_ms(issue: dict) -> int:
+    try:
+        return int(issue.get("updated") or issue.get("created") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _issue_updated_label(issue: dict) -> str:
+    ms = _issue_updated_ms(issue)
+    if not ms:
+        return ""
+    try:
+        return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OSError, OverflowError):
+        return ""
+
+
+def _fetch_my_recently_resolved(
+    project: str,
+) -> tuple[list[dict], str | None]:
+    """
+    Resolved / closed issues assigned to me in ``project``, newest-updated first.
+
+    Prefer YouTrack ``#Resolved`` (all workflow states marked resolved). Fall back
+    to an explicit State list if that query is rejected.
+    """
+    if not project:
+        return [], "default_project is not configured"
+    proj_token = _yt_query_token(project)
+
+    # #Resolved = all states in the "resolved" category for the project.
+    # for: me   = currently assigned to the authenticated user.
+    primary = f"project: {proj_token} #Resolved for: me"
+    issues, err = _fetch_issues_list(primary, top=200)
+    used_resolved_tag = not (err and not issues)
+    if err and "400" in err:
+        # Older / custom workflows: list common finished state names.
+        state_clause = " ".join(
+            f"{{{s}}}"
+            for s in (
+                "Done",
+                "Resolved",
+                "Closed",
+                "Fixed",
+                "Cannot Reproduce",
+                "Won't fix",
+                "Duplicate",
+                "Obsolete",
+                "Cancelled",
+                "Canceled",
+            )
+        )
+        fallback = (
+            f"project: {proj_token} for: me State: {state_clause}"
+        )
+        issues, err = _fetch_issues_list(fallback, top=200)
+        used_resolved_tag = False
+
+    if err and not issues:
+        return [], err
+
+    # When falling back to an explicit State list, drop anything that still
+    # looks open. With #Resolved, trust YouTrack's resolved category.
+    if not used_resolved_tag:
+        filtered: list[dict] = []
+        for issue in issues or []:
+            if not isinstance(issue, dict):
+                continue
+            parsed = _parse_youtrack_issue(issue)
+            state = parsed.get("state") or ""
+            if state and not _is_finished_state(state):
+                continue
+            filtered.append(issue)
+        issues = filtered
+
+    issues = [i for i in (issues or []) if isinstance(i, dict)]
+    issues.sort(key=_issue_updated_ms, reverse=True)
+    return issues, None
+
+
 def _yt_query_token(value: str) -> str:
     """Brace-wrap a YouTrack query token when it contains spaces / special chars."""
     v = (value or "").strip()
@@ -3216,6 +3328,116 @@ class NotesSearchCommand(sublime_plugin.WindowCommand):
             view.run_command("notes_insert_text", {"text": local_body})
             view.set_read_only(True)
             _assign_stnotes_syntax(view)
+
+
+class NotesSearchResolvedCommand(sublime_plugin.WindowCommand):
+    """
+    Command: notes_search_resolved
+    Palette: Notes: Search Recently Resolved
+    Menu: Notes → Search → Recently Resolved / Closed (mine)
+
+    Lists finished (#Resolved / Done / Closed / …) issues assigned to me in
+    default_project, newest-updated first. Enter opens in the browser.
+    """
+
+    def run(self) -> None:
+        base = _youtrack_base()
+        if not base:
+            _error_message(
+                "Notes - YouTrack base URL not configured.\n\n"
+                "Run 'Notes - Settings' and set:\n"
+                '  "youtrack_base": "https://youtrack.example.com/issue/"'
+            )
+            return
+        base_err = _validate_youtrack_base(base)
+        if base_err:
+            _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
+            return
+        if not _youtrack_token():
+            _error_message(
+                "Notes - youtrack_token is not set.\n\n"
+                "Add it in Packages/User/ST4Notes.sublime-settings."
+            )
+            return
+
+        project = _default_project()
+        if not project:
+            _error_message(
+                "Notes - default_project is not set.\n\n"
+                'Add e.g. "default_project": "MYPROJECT" in ST4Notes settings.'
+            )
+            return
+
+        self._base = base
+        self._project = project
+        sublime.status_message(
+            f"Notes: loading recently resolved {project} issues for me..."
+        )
+        sublime.set_timeout_async(self._fetch_async, 0)
+
+    def _fetch_async(self) -> None:
+        issues, err = _fetch_my_recently_resolved(self._project)
+        sublime.set_timeout(lambda: self._show_panel(issues, err), 0)
+
+    def _show_panel(self, issues: list[dict], err: str | None) -> None:
+        if err and not issues:
+            _error_message(
+                f"Notes: could not fetch resolved issues for {self._project}\n\n"
+                f"{err}"
+            )
+            return
+        if not issues:
+            sublime.status_message(
+                f"Notes: no recently resolved/closed issues for you in "
+                f"{self._project}."
+            )
+            return
+
+        self._panel_issues = issues
+        panel_items: list = []
+        for issue in issues:
+            iid = issue.get("idReadable") or ""
+            summary = issue.get("summary") or "(no summary)"
+            parsed = _parse_youtrack_issue(issue)
+            state = parsed.get("state") or "Resolved"
+            when = _issue_updated_label(issue)
+            meta = f"{state}  ·  {when}" if when else state
+            try:
+                panel_items.append(
+                    sublime.QuickPanelItem(
+                        trigger=f"{iid}  {summary}",
+                        annotation=meta,
+                    )
+                )
+            except Exception:
+                panel_items.append([f"{iid}  {summary}", meta])
+
+        sublime.status_message(
+            f"Notes: {len(issues)} resolved/closed issue(s) (newest first)"
+        )
+        self.window.show_quick_panel(
+            panel_items,
+            self._on_select,
+            flags=sublime.MONOSPACE_FONT,
+            selected_index=0,
+            placeholder=(
+                f"{self._project} · my resolved/closed · newest first — "
+                "type to filter, Enter opens"
+            ),
+        )
+
+    def _on_select(self, index: int) -> None:
+        if index == -1:
+            return
+        issues = getattr(self, "_panel_issues", None) or []
+        if index < 0 or index >= len(issues):
+            return
+        iid = issues[index].get("idReadable") or ""
+        if not iid:
+            return
+        url = f"{self._base}{iid}"
+        _open_in_browser(url)
+        sublime.status_message(f"Notes: opened {url}")
 
 
 class NotesOpenIssueCommand(sublime_plugin.WindowCommand):

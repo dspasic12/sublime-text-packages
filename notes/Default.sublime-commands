@@ -16,6 +16,10 @@
         "command": "notes_search"
     },
     {
+        "caption": "Notes: Search Recently Resolved",
+        "command": "notes_search_resolved"
+    },
+    {
         "caption": "Notes: Open Issue",
         "command": "notes_open_issue"
     },

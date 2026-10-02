@@ -20,7 +20,16 @@
                     },
                     {
                         "caption": "Search",
-                        "command": "notes_search"
+                        "children": [
+                            {
+                                "caption": "Notes File…",
+                                "command": "notes_search"
+                            },
+                            {
+                                "caption": "Recently Resolved / Closed (mine)",
+                                "command": "notes_search_resolved"
+                            }
+                        ]
                     },
                     {
                         "caption": "Open Issue",

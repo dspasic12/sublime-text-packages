@@ -12,6 +12,7 @@ Stores a single plain-text notes file (`ST4Notes` syntax), with commands to add/
 | **Notes: Commit Description** | Commit the Add description buffer (also **Cmd/Ctrl+Enter**) |
 | **Notes: Edit** | Open the notes file |
 | **Notes: Search** | Quick-panel search over tickets / TODO / OPS |
+| **Notes: Search Recently Resolved** | YouTrack: my resolved/closed issues (newest updated first) |
 | **Notes: Open Issue** | All issues → pick assignee → palette list (type to filter live, Enter opens) |
 | **Notes: Weekly Summary** | Scratch view of recent activity (sorted by **date**, not time) |
 | **Notes: Weekly Search** | Search within the weekly window |
