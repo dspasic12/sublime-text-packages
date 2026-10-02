@@ -26,7 +26,8 @@
     // Default YouTrack project shortName (issue create / import / TODO list).
     "default_project": "",
 
-    // Stage names offered when creating stage sub-tasks.
+    // Stage names offered when creating YouTrack stage *sub-tasks*
+    // (issue workflow labels — not Kubernetes cluster names).
     // Leave [] to be prompted at creation time.
     // Example: ["Design", "Dev", "QA", "Deploy"]
     "issue_stages": [],

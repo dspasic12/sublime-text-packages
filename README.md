@@ -18,6 +18,12 @@ Superseded by Kubetools — do not install alongside kubetools.
 ### ST4Notes (`notes/`)
 Daily notes file + optional YouTrack / GitLab integration.
 
+### User manual
+
+**[docs/USER-MANUAL.md](docs/USER-MANUAL.md)** — settings layout, seal stages vs
+`issue_stages`, gitops checklist, first-time setup. Read this before copying
+cluster names into ST4Notes settings.
+
 ## Installation
 
 ### Using Package Control
@@ -40,12 +46,13 @@ ln -s "/path/to/sublime-text-packages/kubetools" \
 
 1. Open Kubernetes YAML
 2. Cmd+Shift+P → `.kube` → Compare / Apply / Dry-Run / Seal / Unseal
-3. Preferences → Package Settings → Kubetools → set `stages` for seal keys
+3. **User/Kubetools.sublime-settings** → `stages` (one entry per cluster `pub.pem`)
+4. Keep **User/Kubeseal.sublime-settings** `stages` empty
 
 ### ST4Notes
 
-1. Preferences → Package Settings → ST4Notes → Settings – User
-2. Set tokens only in User settings — never commit them
+1. **User/ST4Notes.sublime-settings** — tokens, `default_project`, optional `issue_stages`
+2. Use workflow labels for `issue_stages` (or `[]`), not cluster names — see user manual
 3. `notes_file` must stay under `notes_path_jail` (default `$HOME`)
 
 ## Requirements

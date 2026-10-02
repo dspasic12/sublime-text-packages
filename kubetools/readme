@@ -21,8 +21,20 @@ Package folder / Package Control name: **`kubetools`** (must match for Settings 
 
 ## Seal stages
 
-Configure `stages` (cert + optional private key) under Kubetools settings.
-If `stages` is empty, User `Kubeseal.sublime-settings` stages are used (migration).
+Configure **`stages` only in Packages/User/Kubetools.sublime-settings** (cert +
+optional private key per cluster). Keep **User/Kubeseal.sublime-settings**
+`stages` empty so you do not maintain two lists.
+
+If Kubetools `stages` is empty, legacy User `Kubeseal.sublime-settings` is used
+as a fallback.
+
+**When GitOps adds** `environments/<env>/<cluster>/sealed-secrets/pub.pem`, add a
+stage whose `name` matches `<cluster>`. Run **Validate Seal Config** after edits.
+If a cluster uses a **dedicated** Sealed Secrets key, read that cluster’s
+`sealed-secrets` docs before reusing sealed YAML from another cluster.
+
+See **[docs/USER-MANUAL.md](../docs/USER-MANUAL.md)** for onboarding and
+`context_path_aliases`.
 
 After a full-file seal, you are offered **Compare State** on the sealed file.
 Overwriting an existing `*-sealedsecret.yaml` requires confirmation (previous → `.bckp-*`).
@@ -87,9 +99,9 @@ context quick panel. The panel is **always** shown — never skipped.
 **Preferences → Package Settings → Kubetools → Settings** (Default | User), or
 Command Palette → `.kubetools - Settings`.
 
-Put your seal `stages` (cert / private key paths) in **Settings – User**.
-If you still have `User/Kubeseal.sublime-settings`, opening Kubetools Settings
-once migrates those stages automatically.
+Put your seal `stages` (cert / private key paths) in **Settings – User** only.
+Opening Kubetools Settings can one-time migrate from old User Kubeseal settings;
+then clear Kubeseal `stages` to avoid duplication.
 
 ## Requirements
 

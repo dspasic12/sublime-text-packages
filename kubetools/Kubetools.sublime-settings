@@ -39,7 +39,7 @@
     // user must always confirm. Dangerous contexts still require type-to-confirm.
     "guess_context_from_path": true,
 
-    // Optional map when folder name ≠ context name, e.g. { "prod-a": "org-prod-a" }
+    // Optional map when folder name ≠ context name, e.g. { "my-cluster": "org-my-cluster" }
     "context_path_aliases": {},
 
     "warn_unsaved_buffer": true,
@@ -65,8 +65,9 @@
 
     // =========================================================================
     // Seal / unseal (kubeseal) — formerly Kubeseal package
-    // If "stages" is empty, stages are loaded from User Kubeseal.sublime-settings
-    // (migration). Prefer copying stages into THIS User settings file.
+    // Configure stages in Packages/User/Kubetools.sublime-settings only.
+    // If empty here, User Kubeseal.sublime-settings is used as fallback (legacy).
+    // Keep User/Kubeseal.sublime-settings stages empty to avoid duplication.
     // =========================================================================
 
     // Per-stage sealed-secrets keys. Configure in Settings – User (right pane).

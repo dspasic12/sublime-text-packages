@@ -46,14 +46,24 @@ No `[HH:MM]` timestamps are added (legacy timestamps in old notes still highligh
 
 Preferences → Package Settings → ST4Notes (keep tokens in **User** settings only)
 
+Full onboarding: **[docs/USER-MANUAL.md](../docs/USER-MANUAL.md)**
+
 | Key | Notes |
 |-----|--------|
 | `notes_file` | Default `~/Documents/ST4Notes` |
 | `youtrack_base` / `youtrack_token` | YouTrack |
 | `gitlab_base` / `gitlab_token` | GitLab MR hover (`read_api`) |
+| `default_project` | YouTrack project shortName (e.g. `MYPROJECT`) |
+| `issue_stages` | **Sub-task labels** for Create Issue — e.g. `Design,Dev,QA,Deploy`. **Not** Kubernetes cluster names (those are Kubetools `stages`). Use `[]` to be prompted each time until you save a list. |
 | `notes_path_jail` | `notes_file` must stay under this dir (default `~`) |
 | `note_max_lines` / `note_max_line_len` | Multi-line Add limits (50 / 500) |
 | `post_comments` | Default `false` |
+
+### Create Issue sub-tasks
+
+With `issue_stages` set, **Notes: Create Issue** can spawn child issues named
+`{parent summary} - {stage}`. Use workflow phase labels (e.g. Design, Dev, QA),
+not Kubernetes cluster folder names (those belong in Kubetools seal `stages`).
 
 ## Safety
 

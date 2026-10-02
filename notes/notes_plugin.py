@@ -1204,7 +1204,7 @@ def _build_unassigned_query(project: str) -> str:
     Build the YouTrack search query for unassigned open issues.
 
     Equivalent UI query:
-        project: Infrastructure Assignee: Unassigned
+        project: MyProject Assignee: Unassigned
         State: -Done, -{In Progress}, -{In review}, ...
 
     Each multi-word state must be wrapped in braces: -{In Progress}
@@ -4592,7 +4592,10 @@ class NotesSettingsCommand(sublime_plugin.WindowCommand):
                     "// youtrack_token  : permanent token (User settings only)\n"
                     "// gitlab_base     : https GitLab root (MR hover)\n"
                     "// gitlab_token    : PAT read_api (User settings only)\n"
-                    "// default_project / issue_stages / post_comments\n"
+                    "// default_project — YouTrack shortName\n"
+                    "// issue_stages — Create Issue sub-task labels (e.g. Design,Dev,QA)\n"
+                    "//   NOT Kubetools cluster seal stages — use [] to prompt once\n"
+                    "// post_comments\n"
                     "// note_max_lines / note_max_line_len : multi-line Add limits\n"
                     "// api_timeout_sec / api_max_retries\n"
                     "{\n"
