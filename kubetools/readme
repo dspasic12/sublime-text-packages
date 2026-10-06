@@ -12,7 +12,7 @@ Package folder / Package Control name: **`kubetools`** (must match for Settings 
 
 | Command | What it does |
 |---------|----------------|
-| **.kubetools - Create…** | Scratch slice: minimal Deployment or Secret. **Cmd/Ctrl+Shift+Enter** applies (not git). Apply refused while namespace is `CHANGE-ME` or name is `example` |
+| **.kubetools - Create…** | Pick a kind (Deployment, Secret, ConfigMap, Ingress, PVC, …). **Cmd/Ctrl+Shift+Enter** applies (not git). Apply refused while namespace is `CHANGE-ME` or name is `example` |
 | **.kubetools - Commit Slice** | Same as apply on the create slice only |
 | **.kubetools - Compare State** | Pick context → underline differing values **inline** on the manifest |
 | **.kubetools - Clear Compare Overlays** | Remove inline annotations / banner |

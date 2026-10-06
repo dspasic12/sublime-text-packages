@@ -13,55 +13,16 @@ import sublime_plugin
 
 try:
     from . import kubetools_common as _ktc
+    from . import kubetools_templates as _tpl
 except ImportError:
     import kubetools_common as _ktc  # type: ignore
+    import kubetools_templates as _tpl  # type: ignore
 
 
 _SLICE_COMMIT_HINT = "Cmd+Shift+Enter (Mac) / Ctrl+Shift+Enter (Win/Linux)"
 
-_TEMPLATES = {
-    "deployment": {
-        "caption": "Deployment",
-        "detail": "Minimal apps/v1 — change namespace (CHANGE-ME) before Apply",
-        "name": ".kubetools create · Deployment",
-        "kind_label": "Deployment",
-        "body": """\
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: example
-  namespace: CHANGE-ME
-spec:
-  selector:
-    matchLabels:
-      app: example
-  template:
-    metadata:
-      labels:
-        app: example
-    spec:
-      containers:
-        - name: example
-          image: nginx:1.27-alpine
-""",
-    },
-    "secret": {
-        "caption": "Secret template",
-        "detail": "Minimal Opaque Secret — change namespace (CHANGE-ME) before Apply / Seal",
-        "name": ".kubetools create · Secret",
-        "kind_label": "Secret",
-        "body": """\
-apiVersion: v1
-kind: Secret
-metadata:
-  name: example-secrets
-  namespace: CHANGE-ME
-type: Opaque
-stringData:
-  EXAMPLE_KEY: "changeme"
-""",
-    },
-}
+_TEMPLATES = _tpl.TEMPLATES
+_TEMPLATE_ORDER = _tpl.TEMPLATE_ORDER
 
 
 def _author():
@@ -102,7 +63,7 @@ def _open_create_slice(window, key):
         return
     body = _slice_header(spec["kind_label"]) + spec["body"]
     view = window.new_file()
-    view.set_name(spec["name"])
+    view.set_name(".kubetools create · " + spec["kind_label"])
     view.set_scratch(True)
     view.settings().set("kubetools_slice", True)
     view.settings().set("kubetools_slice_kind", key)
@@ -143,11 +104,8 @@ class KubetoolsCreateCommand(sublime_plugin.WindowCommand):
         if key in _TEMPLATES:
             _open_create_slice(self.window, key)
             return
-        keys = list(_TEMPLATES.keys())
-        items = [
-            [".kubetools - Create " + _TEMPLATES[k]["caption"], _TEMPLATES[k]["detail"]]
-            for k in keys
-        ]
+        keys = [k for k in _TEMPLATE_ORDER if k in _TEMPLATES]
+        items = [[_TEMPLATES[k]["caption"], _TEMPLATES[k]["detail"]] for k in keys]
 
         def picked(index):
             if index < 0 or index >= len(keys):

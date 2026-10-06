@@ -111,7 +111,7 @@ class KubetoolsHubCommand(sublime_plugin.WindowCommand):
     def run(self):
         view = self.window.active_view()
         rows = [
-            [".kubetools - Create…", "New Deployment or Secret template slice"],
+            [".kubetools - Create…", "Deployment, Secret, ConfigMap, Ingress, PVC, …"],
         ]
         cmds = ["kubetools_create"]
         if _view_is_k8s_manifest(view):
