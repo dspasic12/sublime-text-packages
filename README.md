@@ -82,7 +82,8 @@ Override `notes_file` / `knowledge_base_file` in **User** settings if your Docum
 ### Kubetools
 
 1. **`.kubetools - Create…`** → pick Deployment / Secret / ConfigMap / Ingress / PVC / …
-   → edit slice → **Cmd/Ctrl+Shift+Enter** to apply (not git).
+   → edit slice → **Cmd/Ctrl+Shift+Enter** to apply (not git). After apply, **k9s**
+   opens on that **context**, namespace, and kind.
 2. Compare / Dry-Run / Seal / Unseal from Hub (**Ctrl+K, H** in YAML)
 3. **User/Kubetools.sublime-settings** → `stages` (one entry per cluster `pub.pem`)
 

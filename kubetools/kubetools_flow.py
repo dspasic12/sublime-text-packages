@@ -116,6 +116,9 @@ def _settings():
         # Path → context preselect (never skips the context quick panel)
         "guess_context_from_path": bool(s.get("guess_context_from_path", True)),
         "context_path_aliases": dict(s.get("context_path_aliases", {}) or {}),
+        "open_k9s_after_apply": bool(s.get("open_k9s_after_apply", True)),
+        "k9s_path": s.get("k9s_path", "k9s") or "k9s",
+        "k9s_terminal": (s.get("k9s_terminal", "") or "").strip(),
     }
 
 
@@ -1516,6 +1519,7 @@ class _KubetoolsFlow(object):
         self.missing_namespaces = []
         self.created_namespaces = []
         self.file_path = view.file_name() if view is not None else None
+        self.report_view = None
 
     def _is_read_only_mode(self):
         """Compare / Dry-Run must never mutate cluster or user files."""
@@ -2573,7 +2577,7 @@ class _KubetoolsFlow(object):
                 lines.append(err)
         return "\n".join(lines) + "\n"
 
-    def _format_diff_review_content(self, errors=None):
+    def _format_diff_review_content(self, errors=None, headline=None):
         """
         Build a tab body that Diff.sublime-syntax can colorize.
 
@@ -2581,7 +2585,9 @@ class _KubetoolsFlow(object):
         kubectl unified diff so + is green and - is red.
         """
         lines = []
-        lines.append("Kubetools — review kubectl diff before apply")
+        lines.append(
+            headline or "Kubetools — review kubectl diff before apply"
+        )
         lines.append("Context: {}".format(self.context))
         if self.chosen_namespace:
             lines.append(
@@ -2610,12 +2616,7 @@ class _KubetoolsFlow(object):
         if self.dry_run_text:
             lines.append("")
             lines.append("dry-run=server:")
-            for dry_line in (self.dry_run_text or "").splitlines():
-                # Prefix so Diff does not treat dry-run names as deletions.
-                if dry_line.startswith("+") or dry_line.startswith("-"):
-                    lines.append("  {}".format(dry_line))
-                else:
-                    lines.append(dry_line)
+            lines.extend(self._diff_safe_plain_lines(self.dry_run_text))
 
         if errors:
             lines.append("")
@@ -2635,6 +2636,68 @@ class _KubetoolsFlow(object):
         lines.append("")
         return "\n".join(lines)
 
+    def _diff_safe_plain_lines(self, text):
+        """Indent lines that would be painted as Diff add/remove."""
+        out = []
+        for line in (text or "").splitlines():
+            if line.startswith("+") or line.startswith("-"):
+                out.append("  {}".format(line))
+            else:
+                out.append(line)
+        return out
+
+    def _format_apply_tail(self, apply_out, apply_err, exit_code):
+        """Append-only kubectl apply section (Diff-safe)."""
+        extra = [
+            "",
+            "=" * 72,
+            "kubectl apply — exit {}".format(exit_code),
+            "=" * 72,
+            "",
+        ]
+        blob = (apply_out or "") + (("\n" + apply_err) if apply_err else "")
+        if blob.strip():
+            extra.extend(self._diff_safe_plain_lines(blob))
+        else:
+            extra.append("(no apply output)")
+        extra.append("")
+        return "\n".join(extra) + "\n"
+
+    def _append_apply_report(self, apply_out, apply_err, exit_code):
+        """Reuse the pre-apply Diff tab; create one only if it was never opened."""
+        tail = self._format_apply_tail(apply_out, apply_err, exit_code)
+        title = (
+            "Kubetools Applied @ {}".format(self.context)
+            if exit_code == 0
+            else "Kubetools Apply FAILED @ {}".format(self.context)
+        )
+        view = self.report_view
+        valid = False
+        if view is not None:
+            try:
+                valid = bool(view.is_valid())
+            except Exception:
+                valid = False
+        if valid:
+            view.set_name(title)
+            view.run_command(
+                "kubetools_insert_content",
+                {"content": tail, "at_end": True},
+            )
+            try:
+                view.show(view.size())
+            except Exception:
+                pass
+            self.window.focus_view(view)
+            return
+        body = self._format_diff_review_content([])
+        self._show_output_tab(
+            title,
+            body.rstrip("\n") + "\n" + tail,
+            focus=True,
+            syntax="Packages/Diff/Diff.sublime-syntax",
+        )
+
     def _show_output_tab(self, title, content, focus=True, syntax=None):
         # Always use a scratch tab (native dialogs hard-exit ST4 on macOS).
         new_view = self.window.new_file()
@@ -2647,6 +2710,7 @@ class _KubetoolsFlow(object):
             self._assign_syntax(new_view, syntax)
         if focus:
             self.window.focus_view(new_view)
+        self.report_view = new_view
         return new_view
 
     def _assign_syntax(self, view, syntax):
@@ -2892,16 +2956,7 @@ class _KubetoolsFlow(object):
         code, out, err = self._kubectl(self._with_context(args))
 
         def done():
-            report = self._format_report([])
-            report += "\n=== kubectl apply ===\n"
-            report += (out or "") + (("\n" + err) if err else "")
-            report += "\nexit code: {}\n".format(code)
-            title = (
-                "Kubetools Applied @ {}".format(self.context)
-                if code == 0
-                else "Kubetools Apply FAILED @ {}".format(self.context)
-            )
-            self._show_output_tab(title, report)
+            self._append_apply_report(out, err, code)
             if code == 0:
                 if _view_is_slice(self.view):
                     stamp = datetime.now().astimezone().strftime(
@@ -2910,7 +2965,7 @@ class _KubetoolsFlow(object):
                     self.view.run_command(
                         "kubetools_stamp_applied", {"stamp": stamp}
                     )
-                sublime.status_message("Kubetools: apply succeeded")
+                self._open_k9s_after_apply()
             else:
                 # Report tab already open — do not show error_message after new_file.
                 sublime.status_message(
@@ -2919,3 +2974,61 @@ class _KubetoolsFlow(object):
             self.cleanup()
 
         sublime.set_timeout(done, 0)
+
+    def _open_k9s_after_apply(self):
+        """k9s in a real terminal: same kubectl context, namespace, and kind."""
+        if not self.settings.get("open_k9s_after_apply", True):
+            sublime.status_message("Kubetools: apply succeeded")
+            return
+        ctx = (self.context or "").strip()
+        if not ctx:
+            sublime.status_message(
+                "Kubetools: apply succeeded (k9s skipped: no context)"
+            )
+            return
+        target = _ktc.pick_k9s_target(self.resources)
+        if not target:
+            sublime.status_message("Kubetools: apply succeeded")
+            return
+        k9s_path, path_err = _ktc.resolve_binary(
+            self.settings.get("k9s_path") or "k9s", "k9s"
+        )
+        if path_err:
+            sublime.status_message(
+                "Kubetools: apply succeeded (k9s skipped: {})".format(path_err)
+            )
+            return
+        argv, argv_err = _ktc.build_k9s_argv(
+            k9s_path or "k9s",
+            context=ctx,
+            namespace=target.get("namespace") or "",
+            view=target.get("view") or "",
+            cluster_scoped=bool(target.get("cluster_scoped")),
+        )
+        if argv_err:
+            sublime.status_message(
+                "Kubetools: apply succeeded (k9s skipped: {})".format(argv_err)
+            )
+            return
+        extra_env = None
+        session_dir = _ktc.prepare_k9s_session_dir(
+            target.get("view") or "", target.get("kind")
+        )
+        if session_dir:
+            extra_env = {"K9S_CONFIG_DIR": session_dir}
+        launch_err = _ktc.launch_k9s_in_terminal(
+            argv,
+            terminal_pref=self.settings.get("k9s_terminal") or "",
+            extra_env=extra_env,
+        )
+        if launch_err:
+            sublime.status_message(
+                "Kubetools: apply succeeded (k9s: {})".format(launch_err)
+            )
+            return
+        where = target.get("namespace") or "cluster"
+        sublime.status_message(
+            "Kubetools: apply succeeded · k9s --context {} {} {}".format(
+                ctx, where, target.get("view")
+            )
+        )

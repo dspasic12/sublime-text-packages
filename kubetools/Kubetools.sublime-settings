@@ -18,6 +18,14 @@
     // /snap/bin, Homebrew, Scoop, and Chocolatey.
     "kubectl_path": "kubectl",
     "kubeseal_path": "",
+    // k9s after a successful Apply (same --context as kubectl, -n namespace, -c deploy)
+    // k9s CLI wants a resource alias (pod, deploy, cm), not the in-app ":deployments" form.
+    // GUI PATH is thin: set an absolute k9s_path if the new terminal cannot find k9s.
+    // k9s_terminal: "" = auto (macOS iTerm2, Windows Terminal/conhost, Linux $TERMINAL
+    // then gnome-terminal/konsole/…). Set "terminal" for macOS Terminal.app.
+    "k9s_path": "k9s",
+    "open_k9s_after_apply": true,
+    "k9s_terminal": "",
 
     // Seconds before kubectl / kubeseal commands time out
     "timeout": 60,

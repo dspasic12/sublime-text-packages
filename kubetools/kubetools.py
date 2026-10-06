@@ -229,8 +229,11 @@ class KubetoolsDiffOpenFileCommand(sublime_plugin.WindowCommand):
 
 
 class KubetoolsInsertContentCommand(sublime_plugin.TextCommand):
-    def run(self, edit, content, read_only=True):
-        self.view.insert(edit, 0, content)
+    def run(self, edit, content, read_only=True, at_end=False):
+        if self.view.is_read_only():
+            self.view.set_read_only(False)
+        pos = self.view.size() if at_end else 0
+        self.view.insert(edit, pos, content)
         if read_only:
             self.view.set_read_only(True)
 
@@ -258,6 +261,9 @@ _KUBETOOLS_USER_SETTINGS_DEFAULT = """\
 \t// are "not found", set absolute paths (Homebrew, ~/.local/bin, snap, .exe).
 \t"kubectl_path": "kubectl",
 \t"kubeseal_path": "",
+\t"k9s_path": "k9s",
+\t"open_k9s_after_apply": true,
+\t"k9s_terminal": "",
 \t"timeout": 60,
 
 \t// Seal stages — replace with your cluster folder name + pub.pem / priv.key

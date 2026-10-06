@@ -13,5 +13,8 @@ Context panel always shown (path may preselect). Apply still dry-runs + confirms
 Seal stage panel always shown.
 
 kubectl / kubeseal: the GUI app PATH is often thinner than a terminal.
-If they are "not found", set kubectl_path / kubeseal_path in User settings
+If they are "not found", set kubectl_path / kubeseal_path / k9s_path in User settings
 (Homebrew, ~/.local/bin, /snap/bin, or a Windows .exe).
+
+After Apply, k9s opens in iTerm2 (macOS) with --context, -n, and -c deploy
+(not :deployments). Apply output is appended to the same Diff tab.

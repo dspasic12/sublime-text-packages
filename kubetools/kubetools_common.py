@@ -6,7 +6,9 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 
@@ -647,6 +649,359 @@ def stamp_applied_header(text, stamp):
     if _APPLIED_LINE_RE.search(body):
         return _APPLIED_LINE_RE.sub(line, body, count=1)
     return line + body
+
+
+# CLI ``-c`` aliases (k9s docs: ``k9s -c pod``, not in-app ``:pods``).
+# A leading colon makes k9s treat this as a goto command and often land on :ctx.
+K9S_VIEW_BY_KIND = {
+    "Deployment": "deploy",
+    "StatefulSet": "sts",
+    "DaemonSet": "ds",
+    "ReplicaSet": "rs",
+    "Job": "job",
+    "CronJob": "cj",
+    "Pod": "pod",
+    "Service": "svc",
+    "Ingress": "ing",
+    "IngressClass": "ingressclass",
+    "ConfigMap": "cm",
+    "Secret": "secret",
+    "PersistentVolumeClaim": "pvc",
+    "PersistentVolume": "pv",
+    "ServiceAccount": "sa",
+    "HorizontalPodAutoscaler": "hpa",
+    "NetworkPolicy": "netpol",
+    "Role": "role",
+    "RoleBinding": "rolebinding",
+    "ClusterRole": "clusterrole",
+    "ClusterRoleBinding": "clusterrolebinding",
+    "Namespace": "ns",
+    "Node": "node",
+    "SealedSecret": "sealedsecret",
+}
+
+# GVR keys for views.yaml (k9s custom views). Alias keys also work (v0.40.8+).
+K9S_GVR_BY_KIND = {
+    "Deployment": "apps/v1/deployments",
+    "StatefulSet": "apps/v1/statefulsets",
+    "DaemonSet": "apps/v1/daemonsets",
+    "ReplicaSet": "apps/v1/replicasets",
+    "Job": "batch/v1/jobs",
+    "CronJob": "batch/v1/cronjobs",
+    "Pod": "v1/pods",
+    "Service": "v1/services",
+    "Ingress": "networking.k8s.io/v1/ingresses",
+    "IngressClass": "networking.k8s.io/v1/ingressclasses",
+    "ConfigMap": "v1/configmaps",
+    "Secret": "v1/secrets",
+    "PersistentVolumeClaim": "v1/persistentvolumeclaims",
+    "PersistentVolume": "v1/persistentvolumes",
+    "ServiceAccount": "v1/serviceaccounts",
+    "HorizontalPodAutoscaler": "autoscaling/v2/horizontalpodautoscalers",
+    "NetworkPolicy": "networking.k8s.io/v1/networkpolicies",
+    "Role": "rbac.authorization.k8s.io/v1/roles",
+    "RoleBinding": "rbac.authorization.k8s.io/v1/rolebindings",
+    "ClusterRole": "rbac.authorization.k8s.io/v1/clusterroles",
+    "ClusterRoleBinding": "rbac.authorization.k8s.io/v1/clusterrolebindings",
+    "Namespace": "v1/namespaces",
+    "Node": "v1/nodes",
+    "SealedSecret": "bitnami.com/v1alpha1/sealedsecrets",
+}
+
+_K9S_SAFE_CONTEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$")
+_K9S_SAFE_VIEW = re.compile(r"^:?[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_K9S_SAFE_NS = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$")
+_CREATE_NEW_CONSOLE = 0x00000010
+
+
+def k9s_view_command(kind):
+    """k9s ``-c`` alias (no colon), e.g. Deployment → ``deploy``."""
+    k = (kind or "").strip()
+    if k in K9S_VIEW_BY_KIND:
+        return K9S_VIEW_BY_KIND[k]
+    slug = re.sub(r"[^A-Za-z0-9]", "", k).lower()
+    return slug or "pod"
+
+
+def pick_k9s_target(resources):
+    """
+    Namespace + view for the applied docs.
+    Prefer the first namespaced object (typical Create slice is one kind).
+    """
+    named = [r for r in (resources or []) if r.get("kind")]
+    if not named:
+        return None
+    namespaced = [
+        r
+        for r in named
+        if not r.get("cluster_scoped") and (r.get("namespace") or "").strip()
+    ]
+    chosen = namespaced[0] if namespaced else named[0]
+    ns = (chosen.get("namespace") or "").strip()
+    kind = chosen.get("kind")
+    return {
+        "kind": kind,
+        "name": chosen.get("name") or "",
+        "namespace": ns,
+        "cluster_scoped": bool(chosen.get("cluster_scoped")) or not ns,
+        "view": k9s_view_command(kind),
+    }
+
+
+def resolve_binary(configured, default_name):
+    """Absolute path when found; otherwise the bare command name."""
+    raw = (configured or default_name or "").strip() or default_name
+    expanded = expand_path(raw)
+    err = validate_binary_path(expanded, default_name)
+    if err:
+        return None, err
+    if "/" in expanded or "\\" in expanded:
+        return expanded, None
+    found = find_binary(expanded)
+    return (found or expanded), None
+
+
+def build_k9s_argv(k9s_path, context, namespace, view, cluster_scoped=False):
+    """List argv for k9s, or ``(None, error)``."""
+    path = (k9s_path or "k9s").strip() or "k9s"
+    err = validate_binary_path(path, "k9s")
+    if err:
+        return None, err
+    ctx = (context or "").strip()
+    if not ctx or not _K9S_SAFE_CONTEXT.match(ctx):
+        return None, "kubectl context is missing or unsafe for k9s"
+    view = (view or "").strip()
+    if view.startswith(":"):
+        view = view[1:]
+    if view and not _K9S_SAFE_VIEW.match(view):
+        return None, "k9s view is unsafe"
+    argv = [path, "--splashless", "--context", ctx]
+    if not cluster_scoped:
+        ns = (namespace or "").strip().lower()
+        if not ns or not _K9S_SAFE_NS.match(ns):
+            return None, "namespace is missing or unsafe for k9s"
+        argv.extend(["-n", ns])
+    if view:
+        # CLI -c is a resource alias (pod, deploy). Colon form is in-app only
+        # and lands k9s on the :ctx picker when it does not match an alias.
+        argv.extend(["-c", view])
+    return argv, None
+
+
+def k9s_views_yaml_age_newest(view, kind=None):
+    """
+    k9s views.yaml: sort AGE ascending (smaller age = newer on top).
+    Docs: sortColumn: AGE:asc  (https://k9scli.io/topics/columns/)
+    """
+    keys = []
+    v = (view or "").strip()
+    if v.startswith(":"):
+        v = v[1:]
+    if v:
+        keys.append(v)
+    gvr = K9S_GVR_BY_KIND.get((kind or "").strip())
+    if gvr and gvr not in keys:
+        keys.append(gvr)
+    if not keys:
+        keys.append("v1/pods")
+    lines = ["views:"]
+    for key in keys:
+        lines.append("  {}:".format(key))
+        lines.append("    sortColumn: AGE:asc")
+    return "\n".join(lines) + "\n"
+
+
+def prepare_k9s_session_dir(view, kind=None):
+    """Temp K9S_CONFIG_DIR with AGE:asc views. Does not rewrite the user config."""
+    root = os.path.join(tempfile.gettempdir(), "kubetools-k9s")
+    try:
+        os.makedirs(root, exist_ok=True)
+        path = os.path.join(root, "views.yaml")
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(k9s_views_yaml_age_newest(view, kind))
+    except OSError:
+        return None
+    return root
+
+
+def _applescript_string(s):
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _linux_terminal_argv(name, path, k9s_argv):
+    if name in ("gnome-terminal", "gnome-console", "kgx"):
+        return [path, "--"] + list(k9s_argv)
+    if name == "kitty":
+        return [path] + list(k9s_argv)
+    if name == "xfce4-terminal":
+        return [path, "-x"] + list(k9s_argv)
+    return [path, "-e"] + list(k9s_argv)
+
+
+def k9s_launch_plan(
+    k9s_argv, terminal_pref="", platform=None, which=None, environ=None, extra_env=None
+):
+    """
+    How to open an interactive TTY for k9s (never Sublime's output panel).
+    Returns ``(argv, popen_kwargs, error)``.
+    """
+    if not isinstance(k9s_argv, (list, tuple)) or not k9s_argv:
+        return None, None, "empty k9s command"
+    if any(not isinstance(x, str) for x in k9s_argv):
+        return None, None, "non-string k9s argv"
+    plat = platform if platform is not None else sys.platform
+    env = environ if environ is not None else os.environ
+    which_fn = which
+    if which_fn is None:
+        try:
+            import shutil
+
+            which_fn = shutil.which
+        except Exception:
+            which_fn = lambda n: None  # noqa: E731
+    pref = (terminal_pref or "").strip().lower()
+    if pref in ("", "auto"):
+        pref = "auto"
+
+    if plat == "darwin":
+        quoted = [shlex.quote(a) for a in k9s_argv]
+        env_bits = []
+        for k, v in (extra_env or {}).items():
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", k):
+                continue
+            env_bits.append("{}={}".format(k, shlex.quote(str(v))))
+        script_body = " ".join(env_bits + ["exec"] + quoted)
+        use_iterm = pref in ("auto", "iterm", "iterm2")
+        if use_iterm:
+            ascript = (
+                'tell application "iTerm"\n'
+                "activate\n"
+                "create window with default profile\n"
+                "tell current session of current window\n"
+                "set columns to 220\n"
+                "set rows to 60\n"
+                "write text {}\n"
+                "end tell\n"
+                "try\n"
+                'tell application "System Events"\n'
+                "set {{sx, sy}} to position of desktop 1\n"
+                "set {{sw, sh}} to size of desktop 1\n"
+                "end tell\n"
+                "tell current window\n"
+                "set {{wx, wy, wr, wb}} to bounds\n"
+                "set winW to wr - wx\n"
+                "set winH to wb - wy\n"
+                "set nx to sx + (sw - winW) / 2\n"
+                "set ny to sy + (sh - winH) / 2\n"
+                "set bounds to {{nx, ny, nx + winW, ny + winH}}\n"
+                "end tell\n"
+                "end try\n"
+                "end tell"
+            ).format(_applescript_string(script_body))
+        else:
+            ascript = (
+                'tell application "Terminal"\n'
+                "activate\n"
+                "do script {}\n"
+                "end tell"
+            ).format(_applescript_string(script_body))
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "start_new_session": True,
+        }
+        return ["osascript", "-e", ascript], kwargs, None
+
+    if plat == "win32":
+        merged_env = None
+        if extra_env:
+            merged_env = dict(env)
+            merged_env.update(extra_env)
+        wt = None
+        if pref in ("auto", "windows-terminal", "wt"):
+            try:
+                wt = which_fn("wt")
+            except Exception:
+                wt = None
+        if wt:
+            kwargs = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+            if merged_env is not None:
+                kwargs["env"] = merged_env
+            return [wt, "new-tab", "--title", "k9s", "--"] + list(k9s_argv), kwargs, None
+        wkwargs = {"creationflags": _CREATE_NEW_CONSOLE}
+        if merged_env is not None:
+            wkwargs["env"] = merged_env
+        return list(k9s_argv), wkwargs, None
+
+    term = pref if pref != "auto" else (env.get("TERMINAL") or "")
+    if term:
+        term = os.path.basename(term.replace("\\", "/"))
+    order = []
+    if term and term not in ("auto",):
+        order.append(term)
+    if pref == "auto":
+        order.extend(
+            [
+                "gnome-terminal",
+                "konsole",
+                "xfce4-terminal",
+                "kitty",
+                "alacritty",
+                "x-terminal-emulator",
+                "xterm",
+            ]
+        )
+    seen = set()
+    for name in order:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            path = which_fn(name)
+        except Exception:
+            path = None
+        if not path:
+            continue
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "start_new_session": True,
+        }
+        linux_argv = _linux_terminal_argv(name, path, k9s_argv)
+        if extra_env:
+            env_cmd = ["env"]
+            for k, v in extra_env.items():
+                if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", k):
+                    continue
+                env_cmd.append("{}={}".format(k, v))
+            # Insert env PREFIX before k9s_argv inside the terminal wrapper.
+            prefix_len = len(linux_argv) - len(k9s_argv)
+            linux_argv = linux_argv[:prefix_len] + env_cmd + list(k9s_argv)
+        return linux_argv, kwargs, None
+    return None, None, "no terminal emulator found (set k9s_terminal)"
+
+
+def launch_k9s_in_terminal(k9s_argv, terminal_pref="", popen=None, extra_env=None):
+    """Start k9s in a real terminal. Returns error string or None."""
+    argv, kwargs, err = k9s_launch_plan(
+        k9s_argv, terminal_pref=terminal_pref, extra_env=extra_env
+    )
+    if err:
+        return err
+    fn = popen or subprocess.Popen
+    try:
+        fn(list(argv), **(kwargs or {}))
+    except OSError as exc:
+        return "failed to start k9s: {}".format(exc)
+    except TypeError as exc:
+        return "failed to start k9s: {}".format(exc)
+    return None
 
 
 def mutating_source_block_reason(path, content):

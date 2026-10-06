@@ -16,7 +16,7 @@ Package folder / Package Control name: **`kubetools`** (must match for Settings 
 | **.kubetools - Commit Slice** | Same as apply on the create slice only |
 | **.kubetools - Compare State** | Pick context → underline differing values **inline** on the manifest |
 | **.kubetools - Clear Compare Overlays** | Remove inline annotations / banner |
-| **.kubetools - Apply Open File** | **Create slice only.** Context → dry-run + diff + confirm → `kubectl apply` |
+| **.kubetools - Apply Open File** | **Create slice only.** Context → dry-run + diff + confirm → `kubectl apply` (appended to the same Diff tab) → k9s `--context` `-n` `-c deploy` |
 | **.kubetools - Dry-Run Open File** | Read-only server-side dry-run (not Helm / GitOps / Argo Application files) |
 | **.kubetools - Seal** | Selection → `--raw` encrypt in SealedSecret; no selection → seal Secret → `*-sealedsecret.yaml` |
 | **.kubetools - Unseal** | Offline decrypt selection with stage private key → scratch tab (`DO-NOT-COMMIT`, read-only) |
@@ -89,7 +89,11 @@ Context menus, Command Palette, and Hub only show actions that match the buffer
 On a create slice, **Cmd+Shift+Enter** (Mac) / **Ctrl+Shift+Enter** (Win/Linux)
 starts Apply (same chord as `.notes` commit — this is **not** git commit/push).
 **Alt+Up / Alt+Down** select YAML scalars. After a successful apply, `# applied:`
-is stamped at the top and the buffer becomes **read-only**.
+is stamped at the top and the buffer becomes **read-only**. **iTerm2** (macOS)
+opens **k9s** on the same kubectl **context**, **namespace**, and kind
+(`k9s --context <ctx> -n <ns> -c deploy`). Apply output is **appended** to the
+same Diff tab (not a second file). Set `open_k9s_after_apply` false to skip;
+set `k9s_path` / `k9s_terminal` (`terminal` for Terminal.app) if needed.
 
 **kubectl apply never runs** on Helm values/charts/templates, GitOps
 `bootstrap/` / `environments/` trees, Argo CD `Application` CRs, leftover
@@ -126,4 +130,5 @@ then clear Kubeseal `stages` to avoid duplication.
 
 - Sublime Text 4 (Build 4205+)
 - `kubectl` on PATH (or set `kubectl_path`)
+- `k9s` on PATH for after-apply (or set `k9s_path`); optional
 - `kubeseal` on PATH for Seal/Unseal (or set `kubeseal_path`)

@@ -160,9 +160,16 @@ Linux XDG name (`Dokumente`, …) is your real Documents library, set `notes_fil
 / `knowledge_base_file` in User settings.
 
 GUI Sublime often has a thinner `PATH` than a login shell. If `kubectl` / `kubeseal`
-are not found: set `kubectl_path` / `kubeseal_path`, or on Linux ensure
+/ `k9s` are not found: set `kubectl_path` / `kubeseal_path` / `k9s_path`, or on Linux ensure
 `~/.local/bin` / `/snap/bin` (already searched). Homebrew paths are searched on
 macOS.
+
+After a successful Apply, Kubetools starts **k9s** with the **same kubectl
+context** you confirmed, the applied namespace, and the resource kind
+(`k9s --context <ctx> -n <ns> -c deploy`). On macOS that is **iTerm2**
+(not Terminal.app). Apply output is appended to the pre-apply Diff tab. Turn
+off with `open_k9s_after_apply`. Use `k9s_terminal` (`terminal`,
+`gnome-terminal`, …) if auto detection picks the wrong app.
 
 Commit a slice with **Cmd+Shift+Enter** (macOS) or **Ctrl+Shift+Enter** (Windows /
 Linux). Kubetools hub chords are **Ctrl+K** then a letter (YAML/JSON only).
