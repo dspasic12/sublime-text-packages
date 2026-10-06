@@ -1,8 +1,0 @@
-# Kubeapply (deprecated)
-
-**Superseded by [`kubetools`](../kubetools/).**
-
-Use Command Palette → `.kubetools - …` instead.
-
-This package remains in the repo for history only. Do not symlink it into
-`Packages/` alongside kubetools (duplicate commands).

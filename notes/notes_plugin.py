@@ -1,5 +1,6 @@
 # =============================================================================
-# notes_plugin.py  —  Sublime Text 4 Notes Plugin (ST4Notes)
+# notes_plugin.py  —  Sublime Text 4 package `notes` (Command Palette: .notes)
+# Settings/syntax resource basename remains ST4Notes.* for backward compatibility.
 # Package: notes/  (Sublime Text Packages directory)
 # Requires plugin host Python 3.14 (see .python-version)
 # =============================================================================
@@ -9,114 +10,67 @@ from __future__ import annotations
 import os
 import re
 import sys
-import ssl
-import json
-import time
 import tempfile
 import logging
 import threading
 import webbrowser
 import subprocess
 from datetime import datetime, date as datetime_date, timedelta
-from urllib.request import Request, urlopen, build_opener, HTTPSHandler, HTTPRedirectHandler
-from urllib.error   import URLError, HTTPError
-from urllib.parse   import quote, urlparse
-import ipaddress
-import hashlib
+from urllib.parse import quote, urlparse
 
 import sublime
 import sublime_plugin
+
+from . import notes_common as _nc
+from . import notes_kb_pure as _pure
+from . import notes_yt as _yt
+from . import notes_gitlab as _gl
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-_DEFAULT_NOTES_PATH = "~/Documents/ST4Notes"
 
-
-def _notes_root_jail() -> str:
-    """Optional allowlist root for notes_file (settings: notes_path_jail)."""
-    raw = _settings().get("notes_path_jail", "~")
-    if not isinstance(raw, str) or not raw.strip():
-        raw = "~"
-    return os.path.realpath(os.path.expanduser(raw.strip()))
-
-
-def _assert_notes_path_in_jail(abs_path: str) -> None:
-    """Refuse notes paths that escape the configured jail (default: $HOME)."""
-    jail = _notes_root_jail()
-    try:
-        real = os.path.realpath(abs_path)
-    except OSError as exc:
-        raise RuntimeError(f"Cannot resolve notes path: {exc}") from exc
-    # Allow the file itself or paths under jail
-    if real == jail or real.startswith(jail + os.sep):
-        return
-    raise RuntimeError(
-        f"Refusing notes_file outside notes_path_jail.\n"
-        f"path: {real}\njail: {jail}\n"
-        "Set notes_path_jail in ST4Notes settings if intentional."
-    )
-
-
-def _scrub_error_text(message: object) -> str:
-    """
-    Never surface API tokens in UI / logs.
-
-    Scrubs configured tokens plus common YouTrack / GitLab token shapes so a
-    leaked header or exception body cannot echo credentials into dialogs or the
-    Sublime console.
-    """
-    msg = "" if message is None else str(message)
-    for tok in (_youtrack_token(), _gitlab_token()):
-        if tok and isinstance(tok, str) and len(tok) >= 8:
-            msg = msg.replace(tok, "[redacted]")
-    msg = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", msg)
-    msg = re.sub(r"(?i)(private-token:\s*)\S+", r"\1[redacted]", msg)
-    msg = re.sub(r"(?i)(authorization:\s*)\S+", r"\1[redacted]", msg)
-    # YouTrack permanent tokens / GitLab PATs if echoed outside settings
-    msg = re.sub(r"(?i)\bperm:[A-Za-z0-9._\-+=/]+", "perm:[redacted]", msg)
-    msg = re.sub(r"(?i)\bglpat-[A-Za-z0-9_\-]+", "glpat-[redacted]", msg)
-    return msg
-
-
-def _safe_log(level: str, fmt: str, *args) -> None:
-    """Log with token scrubbing applied to every interpolated argument."""
-    scrubbed = tuple(_scrub_error_text(a) for a in args)
-    getattr(log, level, log.warning)(fmt, *scrubbed)
-
-
-def _notes_file() -> str:
-    """Absolute real path to the notes file (settings: notes_file)."""
-    path = _settings().get("notes_file", _DEFAULT_NOTES_PATH)
-    if not isinstance(path, str) or not path.strip():
-        path = _DEFAULT_NOTES_PATH
-    abs_path = os.path.expanduser(path.strip())
-    _assert_notes_path_in_jail(abs_path)
-    try:
-        return os.path.realpath(abs_path)
-    except OSError:
-        return os.path.abspath(abs_path)
-
-
-def _error_message(message: object) -> None:
-    sublime.error_message(_scrub_error_text(message))
-
-
-def _status_message(message: object) -> None:
-    sublime.status_message(_scrub_error_text(message))
-
-
-def _message_dialog(message: object) -> None:
-    sublime.message_dialog(_scrub_error_text(message))
+# Shared helpers (notes_common) — keep underscore names for call sites in this file
+_SETTINGS_FILE = _nc._SETTINGS_FILE
+_DEFAULT_NOTES_PATH = _nc._DEFAULT_NOTES_PATH
+_NOTES_MAX_FILE_BYTES = _nc._NOTES_MAX_FILE_BYTES
+_SEP = _nc._SEP
+_SEP_RE = _nc._SEP_RE
+log = _nc.log
+_settings = _nc._settings
+_notes_root_jail = _nc._notes_root_jail
+_assert_notes_path_in_jail = _nc._assert_notes_path_in_jail
+_scrub_error_text = _nc._scrub_error_text
+_safe_log = _nc._safe_log
+_notes_file = _nc._notes_file
+_knowledge_base_file = _nc._knowledge_base_file
+_error_message = _nc._error_message
+_status_message = _nc._status_message
+_message_dialog = _nc._message_dialog
+_h = _nc._h
+_is_sep = _nc._is_sep
+_is_stnotes_view = _nc._is_stnotes_view
+_is_notes_scratch_view = _nc._is_notes_scratch_view
+_is_weekly_summary_view = _nc._is_weekly_summary_view
+_assign_stnotes_syntax = _nc._assign_stnotes_syntax
+_open_scratch_view = _nc._open_scratch_view
+_hover_font_family = _nc._hover_font_family
+_hover_font_size = _nc._hover_font_size
+_hover_line_height = _nc._hover_line_height
+_hover_body_style = _nc._hover_body_style
+_hover_pre_style = _nc._hover_pre_style
+_hover_sep_style = _nc._hover_sep_style
+_hover_code_block_style = _nc._hover_code_block_style
 
 
 _TICKET_RE               = re.compile(r"^[A-Z0-9][A-Z0-9_\-]{0,63}$")
-_NEW_TICKET_LABEL        = "[ + Create new issue (YouTrack) ]"
-_IMPORT_FROM_YT_ME_LABEL  = "[ + Import from YouTrack (assigned to me) ]"
-_IMPORT_FROM_YT_ALL_LABEL = "[ + Import from YouTrack (all) ]"
-_OPEN_BY_ID_LABEL        = "[ + Open by ticket ID... ]"
+_NEW_NOTE_LABEL          = "New note"
+_NEW_TICKET_LABEL        = "Issue"
+_IMPORT_FROM_YT_ME_LABEL  = "Import from YouTrack (assigned to me)"
+_IMPORT_FROM_YT_ALL_LABEL = "Import from YouTrack (all)"
+_OPEN_BY_ID_LABEL        = "Open by ticket ID..."
 _TODO_ID           = "TODO"
 _OPS_ID            = "OPS"
 _TODO_SEARCH_LABEL = "TODO (all days)"
@@ -167,308 +121,88 @@ def _open_in_browser(url: str) -> None:
             log.error("Cannot open browser: %s", exc)
 
 
-def _gitlab_diff_file_hash(file_path: str) -> str:
-    """GitLab MR diffs anchor id: #diff-content-{sha1(path)}."""
-    return hashlib.sha1(file_path.encode("utf-8")).hexdigest()
+# Settings, URL guards, and YouTrack HTTP live in notes_yt.py
+_youtrack_base = _yt._youtrack_base
+_youtrack_api_root = _yt._youtrack_api_root
+_youtrack_token = _yt._youtrack_token
+_default_project = _yt._default_project
+_issue_stages = _yt._issue_stages
+_api_timeout = _yt._api_timeout
+_api_max_retries = _yt._api_max_retries
+_post_comments_enabled = _yt._post_comments_enabled
+_gitlab_base = _yt._gitlab_base
+_gitlab_api_root = _yt._gitlab_api_root
+_gitlab_token = _yt._gitlab_token
+_note_max_lines = _yt._note_max_lines
+_note_max_line_len = _yt._note_max_line_len
+_is_blocked_ip_literal = _yt._is_blocked_ip_literal
+_validate_youtrack_base = _yt._validate_youtrack_base
+_youtrack_host = _yt._youtrack_host
+_is_youtrack_host = _yt._is_youtrack_host
+_validate_gitlab_base = _yt._validate_gitlab_base
+_gitlab_host = _yt._gitlab_host
+_is_gitlab_host = _yt._is_gitlab_host
+_ssl_context = _yt._ssl_context
+_api_rate_wait = _yt._api_rate_wait
+_ApiError = _yt._ApiError
+_RejectRedirectHandler = _yt._RejectRedirectHandler
+_yt_urlopen = _yt._yt_urlopen
+_yt_request = _yt._yt_request
+_NOT_FOUND = _yt._NOT_FOUND
+_is_api_error = _yt._is_api_error
+_fetch_current_user = _yt._fetch_current_user
+_fetch_current_user_login = _yt._fetch_current_user_login
+_cached_assignee_display = _yt._cached_assignee_display
+_default_assignee_display = _yt._default_assignee_display
+_fetch_youtrack_issue = _yt._fetch_youtrack_issue
+_fetch_my_open_issues = _yt._fetch_my_open_issues
+_fetch_issues_list = _yt._fetch_issues_list
+_fetch_project_issues_for_import = _yt._fetch_project_issues_for_import
+_fetch_my_assigned_issues_for_import = _yt._fetch_my_assigned_issues_for_import
+_issue_search_blob = _yt._issue_search_blob
+_filter_issues_by_text = _yt._filter_issues_by_text
+_build_unassigned_query = _yt._build_unassigned_query
+_fetch_unassigned_issues = _yt._fetch_unassigned_issues
+_fetch_all_project_issues = _yt._fetch_all_project_issues
+_is_finished_state = _yt._is_finished_state
+_issue_updated_ms = _yt._issue_updated_ms
+_issue_updated_label = _yt._issue_updated_label
+_fetch_my_recently_resolved = _yt._fetch_my_recently_resolved
+_yt_query_token = _yt._yt_query_token
+_fetch_issues_assigned_to = _yt._fetch_issues_assigned_to
+_invalidate_users_cache = _yt._invalidate_users_cache
+_assignees_from_issues = _yt._assignees_from_issues
+_fetch_youtrack_users = _yt._fetch_youtrack_users
+_fetch_parent_info = _yt._fetch_parent_info
+_yt_add_comment = _yt._yt_add_comment
+_yt_apply_command = _yt._yt_apply_command
+_issue_severity_rank = _yt._issue_severity_rank
+_sort_issues_by_severity = _yt._sort_issues_by_severity
+IssueCreateError = _yt.IssueCreateError
+_set_youtrack_done = _yt._set_youtrack_done
+_set_youtrack_in_review = _yt._set_youtrack_in_review
+_yt_get_project_id = _yt._yt_get_project_id
+_yt_get_subtask_link_id = _yt._yt_get_subtask_link_id
+_yt_issue_entity_id = _yt._yt_issue_entity_id
+_yt_link_as_subtask = _yt._yt_link_as_subtask
+_yt_create_issue = _yt._yt_create_issue
+_parse_youtrack_issue = _yt._parse_youtrack_issue
 
-
-def _mr_file_diffs_url(mr_url: str, file_path: str) -> str:
-    """URL to MR Changes tab scrolled to ``file_path``."""
-    base = (mr_url or "").split("#", 1)[0].rstrip("/")
-    if base.endswith("/diffs"):
-        base = base[: -len("/diffs")]
-    h = _gitlab_diff_file_hash(file_path)
-    return f"{base}/diffs#diff-content-{h}"
-
-
-# ---------------------------------------------------------------------------
-# Settings
-# ---------------------------------------------------------------------------
-
-_SETTINGS_FILE = "ST4Notes.sublime-settings"
-
-
-def _settings() -> sublime.Settings:
-    return sublime.load_settings(_SETTINGS_FILE)
-
-
-def _youtrack_base() -> str:
-    base = _settings().get("youtrack_base", "").strip()
-    if base and not base.endswith("/"):
-        base += "/"
-    return base
-
-
-def _youtrack_api_root() -> str:
-    base = _youtrack_base()
-    if not base:
-        return ""
-    api_root = re.sub(r"/issues?/?$", "", base.rstrip("/"))
-    return api_root + "/api"
-
-
-def _youtrack_token() -> str:
-    return _settings().get("youtrack_token", "").strip()
-
-
-def _default_project() -> str:
-    return _settings().get("default_project", "").strip().upper()
-
-
-def _issue_stages() -> list[str]:
-    stages = _settings().get("issue_stages", [])
-    if not isinstance(stages, list):
-        return []
-    return [str(s).strip() for s in stages if str(s).strip()]
-
-
-def _api_timeout() -> int:
-    val = _settings().get("api_timeout_sec", 10)
-    try:
-        return max(3, min(60, int(val)))
-    except (TypeError, ValueError):
-        return 10
-
-
-def _api_max_retries() -> int:
-    val = _settings().get("api_max_retries", 2)
-    try:
-        return max(0, min(5, int(val)))
-    except (TypeError, ValueError):
-        return 2
-
-
-def _post_comments_enabled() -> bool:
-    """Global toggle: whether to post YouTrack comments when adding notes."""
-    val = _settings().get("post_comments", False)
-    if isinstance(val, bool):
-        return val
-    return False
-
-
-def _gitlab_base() -> str:
-    base = _settings().get("gitlab_base", "").strip()
-    if base and not base.endswith("/"):
-        base += "/"
-    return base
-
-
-def _gitlab_api_root() -> str:
-    base = _gitlab_base()
-    if not base:
-        return ""
-    return base.rstrip("/") + "/api/v4"
-
-
-def _gitlab_token() -> str:
-    return _settings().get("gitlab_token", "").strip()
-
-
-def _note_max_lines() -> int:
-    try:
-        return max(1, min(200, int(_settings().get("note_max_lines", 50))))
-    except (TypeError, ValueError):
-        return 50
-
-
-def _note_max_line_len() -> int:
-    try:
-        return max(40, min(2000, int(_settings().get("note_max_line_len", 500))))
-    except (TypeError, ValueError):
-        return 500
-
-
-# ---------------------------------------------------------------------------
-# Security: base URL validation + host guard
-# ---------------------------------------------------------------------------
-
-def _is_blocked_ip_literal(hostname: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        return False
-    if (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    ):
-        return True
-    # CGNAT 100.64.0.0/10 (is_private covers this on modern Python; keep explicit)
-    if isinstance(ip, ipaddress.IPv4Address):
-        return ipaddress.IPv4Address("100.64.0.0") <= ip <= ipaddress.IPv4Address("100.127.255.255")
-    return False
-
-
-def _validate_youtrack_base(base: str) -> str | None:
-    if not base:
-        return None
-
-    parsed = urlparse(base)
-
-    if parsed.scheme != "https":
-        return (
-            "youtrack_base must start with https://\n"
-            "Plain http is rejected because the Bearer token would be "
-            "transmitted in cleartext."
-        )
-
-    hostname = (parsed.hostname or "").lower()
-    if not hostname:
-        return "youtrack_base has no hostname."
-
-    if _is_blocked_ip_literal(hostname):
-        return (
-            f"youtrack_base hostname '{hostname}' is a loopback/private/"
-            "link-local address.\n"
-            "Point youtrack_base at your public YouTrack instance."
-        )
-
-    _BLOCKED_EXACT = {
-        "localhost",
-        "metadata.google.internal",
-        "kubernetes.default",
-        "kubernetes.default.svc",
-    }
-    if hostname in _BLOCKED_EXACT or hostname.endswith(".local"):
-        return (
-            f"youtrack_base hostname '{hostname}' is blocked.\n"
-            "Point youtrack_base at your public YouTrack instance."
-        )
-
-    _BLOCKED_PREFIXES = (
-        "localhost.", "127.", "0.", "10.", "192.168.", "169.254.",
-    )
-    _BLOCKED_RANGES_172 = range(16, 32)
-
-    if any(hostname == p.rstrip(".") or hostname.startswith(p) for p in _BLOCKED_PREFIXES):
-        return (
-            f"youtrack_base hostname '{hostname}' is a loopback or private address.\n"
-            "Point youtrack_base at your public YouTrack instance."
-        )
-
-    # Dotted hostname that is actually an IPv4 string already handled; also
-    # reject 172.16–31.* and 100.64–127.* when written as DNS-looking labels.
-    parts = hostname.split(".")
-    if len(parts) == 4 and all(p.isdigit() for p in parts):
-        if _is_blocked_ip_literal(hostname):
-            return (
-                f"youtrack_base hostname '{hostname}' is a private address.\n"
-                "Point youtrack_base at your public YouTrack instance."
-            )
-    if (
-        len(parts) >= 2
-        and parts[0] == "172"
-        and parts[1].isdigit()
-        and int(parts[1]) in _BLOCKED_RANGES_172
-    ):
-        return (
-            f"youtrack_base hostname '{hostname}' is in a private IP range.\n"
-            "Point youtrack_base at your public YouTrack instance."
-        )
-    if (
-        len(parts) >= 2
-        and parts[0] == "100"
-        and parts[1].isdigit()
-        and 64 <= int(parts[1]) <= 127
-    ):
-        return (
-            f"youtrack_base hostname '{hostname}' is in the CGNAT range.\n"
-            "Point youtrack_base at your public YouTrack instance."
-        )
-
-    return None
-
-
-def _youtrack_host() -> str:
-    base = _youtrack_base()
-    if not base:
-        return ""
-    try:
-        return urlparse(base).hostname or ""
-    except Exception:
-        return ""
-
-
-def _is_youtrack_host(url: str) -> bool:
-    yt_host = _youtrack_host()
-    if not yt_host:
-        return False
-    try:
-        url_host = urlparse(url).hostname or ""
-    except Exception:
-        return False
-    return url_host.lower() == yt_host.lower()
-
-
-def _validate_gitlab_base(base: str) -> str | None:
-    """Reuse YouTrack HTTPS / private-host rules for gitlab_base."""
-    if not base:
-        return None
-    as_yt_shape = base if "/issue" in base else base.rstrip("/") + "/issue/"
-    return _validate_youtrack_base(as_yt_shape)
-
-
-def _gitlab_host() -> str:
-    base = _gitlab_base()
-    if not base:
-        return ""
-    try:
-        return urlparse(base).hostname or ""
-    except Exception:
-        return ""
-
-
-def _is_gitlab_host(url: str) -> bool:
-    gl_host = _gitlab_host()
-    if not gl_host:
-        return False
-    try:
-        url_host = urlparse(url).hostname or ""
-    except Exception:
-        return False
-    return url_host.lower() == gl_host.lower()
-
-
+_gitlab_diff_file_hash = _gl._gitlab_diff_file_hash
+_mr_file_diffs_url = _gl._mr_file_diffs_url
+_parse_gitlab_mr_url = _gl._parse_gitlab_mr_url
+_gitlab_request = _gl._gitlab_request
+_pipeline_color = _gl._pipeline_color
+_mr_state_color = _gl._mr_state_color
+_fetch_gitlab_mr_info = _gl._fetch_gitlab_mr_info
+_build_mr_hover_html = _gl._build_mr_hover_html
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 
 def _today_header() -> str:
     now = datetime.now()
-    return f"# {now.year}.{now.month}.{now.day}"
-
-
-_SEP    = "# " + "=" * 77
-_SEP_RE = re.compile(r"^# =+\s*$")
-
-
-def _is_sep(line: str) -> bool:
-    return bool(_SEP_RE.match(line))
-
-
-def _is_stnotes_view(view: sublime.View) -> bool:
-    if "stnotes" in view.scope_name(0):
-        return True
-    fname = view.file_name() or ""
-    return fname == _notes_file()
-
-
-def _is_notes_scratch_view(view: sublime.View) -> bool:
-    """
-    Return True for any scratch view produced by this plugin
-    (Weekly Summary, Weekly Search, Notes: Search, Notes: TODO, etc.).
-    """
-    name = view.settings().get("stnotes_view_name", "")
-    return bool(name)
-
-
-def _is_weekly_summary_view(view: sublime.View) -> bool:
-    """Return True for scratch views produced by Weekly Summary / Weekly Search."""
-    name = view.settings().get("stnotes_view_name", "")
-    return bool(name) and name.startswith("Notes: Weekly")
+    return f"# DATE: {now.strftime('%Y-%m-%d')}  {now.strftime('%A')}"
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +213,6 @@ def _is_weekly_summary_view(view: sublime.View) -> bool:
 _notes_io_lock      = threading.Lock()
 _notes_cache_lock   = threading.Lock()
 _notes_cache_mtime: float | None = None
-_NOTES_MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MiB — refuse runaway notes files
 _notes_cache_lines: list[str]    = []
 
 
@@ -539,6 +272,7 @@ def _write_notes(lines: list[str]) -> None:
             f"Cannot create notes directory '{notes_dir}': {exc}"
         ) from exc
 
+    lines = _pure.ensure_blank_between_journal_blocks(list(lines))
     content = "\n".join(lines) + ("\n" if lines else "")
     if len(content.encode("utf-8")) > _NOTES_MAX_FILE_BYTES:
         raise RuntimeError(
@@ -546,23 +280,12 @@ def _write_notes(lines: list[str]) -> None:
             "Archive old sections first."
         )
     try:
-        fd, tmp_path = tempfile.mkstemp(dir=notes_dir, prefix=".ST4Notes_tmp_")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(content)
-                fh.flush()
-                os.fsync(fh.fileno())
-            try:
-                os.chmod(tmp_path, 0o600)
-            except OSError:
-                pass
-            os.replace(tmp_path, _notes_file())
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        _nc.atomic_write_utf8(
+            _notes_file(),
+            content,
+            mode=0o600,
+            replace_command="notes_replace_text",
+        )
     except PermissionError:
         raise RuntimeError(f"Permission denied writing to '{_notes_file()}'.")
     except OSError as exc:
@@ -608,9 +331,9 @@ def _get_ticket_index() -> tuple[dict[str, list[str]], list[str]]:
 # ---------------------------------------------------------------------------
 
 def _find_today_section(lines: list[str]) -> tuple[int | None, ...]:
-    header = _today_header()
+    today = datetime.now().date()
     for idx, line in enumerate(lines):
-        if line.strip() != header:
+        if _parse_date_header(line) != today:
             continue
         open_sep  = idx - 1 if (idx > 0 and _is_sep(lines[idx - 1])) else None
         hdr_close = idx + 1
@@ -636,10 +359,11 @@ def _find_today_section(lines: list[str]) -> tuple[int | None, ...]:
 def _find_ticket_in_section(
     lines: list[str], content_start: int, content_end: int, ticket_id: str
 ) -> int | None:
-    needle        = f"# {ticket_id}:"
+    needle_name = (ticket_id or "").strip()
     found_header: int | None = None
     for i in range(content_start, content_end + 1):
-        if lines[i].strip().upper() == needle.upper():
+        name = _pure.journal_ticket_header_name(lines[i])
+        if name and _pure.journal_topics_equivalent(name, needle_name):
             found_header = i
     if found_header is None:
         return None
@@ -661,12 +385,11 @@ def _get_today_tickets() -> list[str]:
     (_, hdr_idx, _, content_start, content_end, _) = _find_today_section(lines)
     if hdr_idx is None or content_end < content_start:
         return []
-    ticket_re = re.compile(r"^#\s+([A-Z0-9][A-Z0-9_\-]*):\s*$", re.IGNORECASE)
     seen: dict[str, None] = {}
     for i in range(content_start, content_end + 1):
-        m = ticket_re.match(lines[i].strip())
-        if m:
-            seen[m.group(1).upper()] = None
+        name = _pure.journal_ticket_header_name(lines[i])
+        if name:
+            seen.setdefault(name, None)
     return list(seen.keys())
 
 
@@ -679,27 +402,28 @@ def _get_today_tickets_with_desc() -> list[tuple[str, str]]:
     if hdr_idx is None or content_end < content_start:
         return []
 
-    ticket_re = re.compile(r"^#\s+([A-Z0-9][A-Z0-9_\-]*):\s*$", re.IGNORECASE)
     bullet_re = re.compile(r"^-\s+(?:\[\d{2}:\d{2}\]\s+)?(.+)$")
 
     order:       list[str]      = []
     last_desc:   dict[str, str] = {}
     current_tid: str | None     = None
+    current_key: str | None     = None
 
     for i in range(content_start, content_end + 1):
         stripped = lines[i].strip()
-        m = ticket_re.match(stripped)
-        if m:
-            current_tid = m.group(1).upper()
-            if current_tid not in last_desc:
-                order.append(current_tid)
-                last_desc[current_tid] = ""
-        elif current_tid and stripped.startswith("- "):
+        name = _pure.journal_ticket_header_name(stripped)
+        if name:
+            current_tid = name
+            current_key = name.casefold()
+            if current_key not in last_desc:
+                order.append(name)
+                last_desc[current_key] = ""
+        elif current_key and stripped.startswith("- "):
             bm = bullet_re.match(stripped)
             if bm:
-                last_desc[current_tid] = bm.group(1).strip()
+                last_desc[current_key] = bm.group(1).strip()
 
-    return [(tid, last_desc.get(tid, "")) for tid in order]
+    return [(tid, last_desc.get(tid.casefold(), "")) for tid in order]
 
 
 # ---------------------------------------------------------------------------
@@ -707,12 +431,12 @@ def _get_today_tickets_with_desc() -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 _DATE_HDR_RE   = re.compile(r"^#\s+\d{4}\.\d{1,2}\.\d{1,2}\s*$")
-_TICKET_HDR_RE = re.compile(r"^#\s+([A-Z0-9][A-Z0-9_\-]*):\s*$", re.IGNORECASE)
 
 
 def _build_ticket_index(lines: list[str]) -> dict[str, list[str]]:
     index:   dict[str, list[str]] = {}
     emitted: set[tuple[str, str]] = set()
+    fold_to_key: dict[str, str] = {}
     current_date   = ""
     current_ticket = ""
 
@@ -721,15 +445,17 @@ def _build_ticket_index(lines: list[str]) -> dict[str, list[str]]:
         if _is_sep(stripped):
             current_ticket = ""
             continue
-        if _DATE_HDR_RE.match(stripped):
+        if _DATE_HDR_RE.match(stripped) or _pure.parse_journal_date_header(stripped):
             current_date   = stripped.lstrip("#").strip()
             current_ticket = ""
             continue
-        m = _TICKET_HDR_RE.match(stripped)
-        if m:
-            current_ticket = m.group(1).upper()
-            if current_ticket not in index:
-                index[current_ticket] = []
+        name = _pure.journal_ticket_header_name(stripped)
+        if name:
+            fold = name.casefold()
+            if fold not in fold_to_key:
+                fold_to_key[fold] = name
+                index[name] = []
+            current_ticket = fold_to_key[fold]
             continue
         if stripped.startswith("- ") and current_ticket:
             key = (current_ticket, current_date)
@@ -760,1125 +486,10 @@ def _first_bullet_from_index(entries: list[str]) -> str:
     return ""
 
 
-# ---------------------------------------------------------------------------
-# SSL context
-# ---------------------------------------------------------------------------
-
-def _ssl_context() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = True
-    ctx.verify_mode    = ssl.CERT_REQUIRED
-    return ctx
-
-
-# ---------------------------------------------------------------------------
-# Rate-limit guard
-# ---------------------------------------------------------------------------
-
-_api_rate_lock      = threading.Lock()
-_api_last_call_time: float = 0.0
-_API_MIN_INTERVAL   = 0.1
-
-
-def _api_rate_wait() -> None:
-    global _api_last_call_time
-    with _api_rate_lock:
-        now     = time.monotonic()
-        elapsed = now - _api_last_call_time
-        if elapsed < _API_MIN_INTERVAL:
-            time.sleep(_API_MIN_INTERVAL - elapsed)
-        _api_last_call_time = time.monotonic()
-
-
-# ---------------------------------------------------------------------------
-# YouTrack REST API — shared HTTP helper
-# ---------------------------------------------------------------------------
-
-_NOT_FOUND: dict = {"__not_found__": True}
-
-
-class _ApiError(dict):
-    pass
-
-
-def _make_api_error(status: int, body: str) -> _ApiError:
-    try:
-        data = json.loads(body)
-        desc = data.get("error_description") or data.get("error") or body[:300]
-    except Exception:
-        desc = body[:300] if body else f"HTTP {status}"
-    return _ApiError({"__api_error__": True, "status": status, "description": desc})
-
-
-def _is_api_error(obj: object) -> bool:
-    return isinstance(obj, _ApiError)
-
-
-
-class _RejectRedirectHandler(HTTPRedirectHandler):
-    """Refuse redirects so Bearer tokens are never forwarded to another origin."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise URLError(
-            f"Refusing HTTP {code} redirect from YouTrack API to {newurl}"
-        )
-
-
-def _yt_urlopen(req: Request, timeout: int, ctx: ssl.SSLContext):
-    opener = build_opener(HTTPSHandler(context=ctx), _RejectRedirectHandler())
-    return opener.open(req, timeout=timeout)
-
-
-def _yt_request(
-    method: str,
-    path: str,
-    body: dict | None = None,
-    params: str = "",
-) -> dict | list | None:
-    api_root = _youtrack_api_root()
-    token    = _youtrack_token()
-    if not api_root or not token:
-        return None
-
-    base_err = _validate_youtrack_base(_youtrack_base())
-    if base_err:
-        log.error("YouTrack base URL rejected: %s", base_err)
-        return None
-
-    url = f"{api_root}{path}"
-    if params:
-        url += ("&" if "?" in url else "?") + params
-
-    data    = json.dumps(body).encode("utf-8") if body is not None else None
-    timeout = _api_timeout()
-    retries = _api_max_retries()
-    ctx     = _ssl_context()
-
-    for attempt in range(retries + 1):
-        _api_rate_wait()
-
-        req = Request(
-            url,
-            data=data,
-            method=method,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept":        "application/json",
-                "Content-Type":  "application/json",
-                "Cache-Control": "no-cache",
-            },
-        )
-        try:
-            with _yt_urlopen(req, timeout=timeout, ctx=ctx) as resp:
-                raw = resp.read(_API_MAX_RESPONSE_BYTES).decode("utf-8")
-                return json.loads(raw) if raw.strip() else {}
-
-        except HTTPError as exc:
-            if exc.code == 404:
-                return _NOT_FOUND
-
-            if exc.code in (429, 502, 503) and attempt < retries:
-                wait = 2 ** attempt
-                log.warning(
-                    "YouTrack: HTTP %s (attempt %d/%d), retrying in %ds",
-                    exc.code, attempt + 1, retries + 1, wait,
-                )
-                time.sleep(wait)
-                continue
-
-            try:
-                err_body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                err_body = ""
-            _safe_log(
-                "warning",
-                "YouTrack API HTTP %s for %s %s  body: %s",
-                exc.code, method, path, err_body[:200],
-            )
-            return _make_api_error(exc.code, err_body)
-
-        except (URLError, OSError, json.JSONDecodeError) as exc:
-            if attempt < retries:
-                wait = 2 ** attempt
-                _safe_log(
-                    "warning",
-                    "YouTrack API %s %s transient error (attempt %d/%d): %s",
-                    method, path, attempt + 1, retries + 1, exc,
-                )
-                time.sleep(wait)
-                continue
-            _safe_log("warning", "YouTrack API %s %s error: %s", method, path, exc)
-            return None
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — current user cache
-# ---------------------------------------------------------------------------
-
-_current_user_lock  = threading.Lock()
-_CURRENT_USER_CACHE: dict[str, str] = {}
-
-
-def _fetch_current_user_login() -> tuple[str | None, str | None]:
-    with _current_user_lock:
-        if _CURRENT_USER_CACHE:
-            return (
-                _CURRENT_USER_CACHE.get("login") or None,
-                _CURRENT_USER_CACHE.get("fullName") or None,
-            )
-
-    result = _yt_request("GET", "/users/me", params="fields=login,fullName")
-    if not result or not isinstance(result, dict) or _is_api_error(result):
-        return None, None
-
-    login    = (result.get("login") or "").strip()
-    fullname = (result.get("fullName") or "").strip()
-
-    if login:
-        with _current_user_lock:
-            _CURRENT_USER_CACHE["login"]    = login
-            _CURRENT_USER_CACHE["fullName"] = fullname
-
-    return login or None, fullname or None
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — fetch ticket info
-# ---------------------------------------------------------------------------
-
-_YT_FIELDS = (
-    "summary,"
-    "idReadable,"
-    "created,"
-    "reporter(fullName,login),"
-    "customFields("
-      "name,"
-      "value(name,fullName,presentation,login)"
-    ")"
-)
-
-_YT_LIST_FIELDS = (
-    "idReadable,"
-    "summary,"
-    "created,"
-    "updated,"
-    "reporter(fullName,login),"
-    "customFields("
-      "name,"
-      "value(name,fullName,presentation,login)"
-    ")"
-)
-
-
-def _fetch_youtrack_issue(ticket_id: str) -> dict | None:
-    result = _yt_request(
-        "GET",
-        f"/issues/{quote(ticket_id)}",
-        params=f"fields={quote(_YT_FIELDS)}",
-    )
-    if _is_api_error(result):
-        return None
-    return result  # type: ignore[return-value]
-
-
-def _fetch_my_open_issues(project: str) -> list[dict]:
-    """Fetch issues assigned to me (used by TODO scratch view)."""
-    if not project:
-        return []
-    query = f"for: me #Unresolved project: {{{project}}}"
-    result = _yt_request(
-        "GET",
-        "/issues",
-        params=(
-            f"query={quote(query)}"
-            f"&fields={quote(_YT_LIST_FIELDS)}"
-            f"&$top=200"
-        ),
-    )
-    if result is None or result is _NOT_FOUND or _is_api_error(result):
-        return []
-    if not isinstance(result, list):
-        return []
-    return result
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — shared list fetch helper (large buffer, safe encoding)
-# ---------------------------------------------------------------------------
-
-def _fetch_issues_list(
-    query: str,
-    top: int = 300,
-) -> tuple[list[dict], str | None]:
-    """
-    Generic helper: fetch a list of YouTrack issues using the given query.
-    Uses _API_MAX_RESPONSE_BYTES_LIST (8 MB) to prevent truncation on large
-    projects.  Returns (issues, error_message).
-    Sorted newest-updated first (client-side).
-    """
-    api_root = _youtrack_api_root()
-    token    = _youtrack_token()
-    if not api_root or not token:
-        return [], "YouTrack is not configured (missing token or base URL)"
-
-    base_err = _validate_youtrack_base(_youtrack_base())
-    if base_err:
-        return [], base_err
-
-    # safe='' encodes ALL special chars: spaces, {, }, :, #
-    url = (
-        f"{api_root}/issues"
-        f"?query={quote(query, safe='')}"
-        f"&fields={quote(_YT_LIST_FIELDS, safe='')}"
-        f"&$top={top}"
-    )
-
-    timeout = _api_timeout()
-    retries = _api_max_retries()
-    ctx     = _ssl_context()
-    last_error_msg: str = "Unknown error"
-    raw: str = ""
-
-    for attempt in range(retries + 1):
-        _api_rate_wait()
-        req = Request(
-            url,
-            method="GET",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept":        "application/json",
-                "Content-Type":  "application/json",
-                "Cache-Control": "no-cache",
-            },
-        )
-        try:
-            with _yt_urlopen(req, timeout=timeout, ctx=ctx) as resp:
-                # Use large buffer — list responses for big projects can be
-                # several MB; truncation causes JSONDecodeError mid-object.
-                raw  = resp.read(_API_MAX_RESPONSE_BYTES_LIST).decode("utf-8")
-                data = json.loads(raw) if raw.strip() else []
-                if not isinstance(data, list):
-                    return [], "Unexpected response format from YouTrack"
-                data.sort(
-                    key=lambda i: i.get("updated") or i.get("created") or 0,
-                    reverse=True,
-                )
-                return data, None
-
-        except HTTPError as exc:
-            try:
-                err_body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                err_body = ""
-            if exc.code == 400:
-                _safe_log(
-                    "warning",
-                    "ST4Notes fetch_issues_list HTTP 400 query=%r body=%s",
-                    query, err_body[:400],
-                )
-                # Do not put full API URLs / raw bodies in UI dialogs
-                return [], (
-                    f"HTTP 400 — query rejected by YouTrack.\n\n"
-                    f"Query: {query}\n\n"
-                    f"Response: {_scrub_error_text(err_body[:300])}"
-                )
-            if exc.code == 404:
-                return [], "Project not found (HTTP 404)"
-            if exc.code == 401:
-                return [], "Authentication failed (HTTP 401) — check youtrack_token"
-            if exc.code == 403:
-                return [], "Permission denied (HTTP 403) — token lacks Read Issue"
-            if exc.code in (429, 502, 503) and attempt < retries:
-                time.sleep(2 ** attempt)
-                last_error_msg = f"HTTP {exc.code}"
-                continue
-            last_error_msg = (
-                f"HTTP {exc.code}: {_scrub_error_text(err_body[:200])}"
-            )
-
-        except (TimeoutError, URLError, OSError) as exc:
-            last_error_msg = _scrub_error_text(f"Cannot reach YouTrack: {exc}")
-            if attempt < retries:
-                time.sleep(2 ** attempt)
-                continue
-
-        except json.JSONDecodeError as exc:
-            _safe_log(
-                "warning",
-                "ST4Notes fetch_issues_list: JSON decode failed. Error: %s Raw: %.200s",
-                exc, raw,
-            )
-            return [], (
-                "JSON decode error from YouTrack (response truncated or corrupt).\n"
-                "Check View → Show Console for scrubbed details."
-            )
-
-    return [], last_error_msg
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — concrete list fetch functions
-# ---------------------------------------------------------------------------
-
-def _fetch_project_issues_for_import(project: str) -> tuple[list[dict], str | None]:
-    """
-    Fetch all unresolved issues in the project (not just assigned to me).
-    Used by: Import from YouTrack (all).
-    Returns (issues, error_message).  Sorted newest-updated first.
-    """
-    if not project:
-        return [], "default_project is not configured"
-    query = f"#Unresolved project: {{{project}}}"
-    return _fetch_issues_list(query, top=300)
-
-
-def _fetch_my_assigned_issues_for_import(project: str) -> tuple[list[dict], str | None]:
-    """
-    Fetch unresolved issues assigned to the current user.
-    Used by: Import from YouTrack (assigned to me).
-    Returns (issues, error_message).  Sorted newest-updated first.
-    """
-    if not project:
-        return [], "default_project is not configured"
-    query = f"for: me #Unresolved project: {{{project}}}"
-    return _fetch_issues_list(query, top=200)
-
-
-def _issue_search_blob(issue: dict) -> str:
-    """Plain text used for explicit substring filtering (not ST fuzzy)."""
-    parsed = _parse_youtrack_issue(issue) if issue else {}
-    parts = [
-        issue.get("idReadable") or "",
-        issue.get("summary") or "",
-        parsed.get("state") or "",
-        parsed.get("assignee") or "",
-        parsed.get("assignee_login") or "",
-    ]
-    return " ".join(parts).casefold()
-
-
-def _filter_issues_by_text(issues: list[dict], query: str) -> list[dict]:
-    """
-    Narrow issues with explicit substring match.
-    Every whitespace-separated token must appear somewhere in id/summary/state/assignee.
-    Empty query → unchanged list.
-    """
-    q = (query or "").strip().casefold()
-    if not q:
-        return list(issues)
-    tokens = [t for t in q.split() if t]
-    if not tokens:
-        return list(issues)
-    out: list[dict] = []
-    for issue in issues:
-        blob = _issue_search_blob(issue)
-        if all(tok in blob for tok in tokens):
-            out.append(issue)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — fetch unassigned issues
-# ---------------------------------------------------------------------------
-
-# States excluded from the unassigned view — mirrors your UI query exactly.
-_UNASSIGNED_EXCLUDE_STATES: list[str] = [
-    "Done",
-    "In Progress",
-    "In review",
-    "On hold",
-    "In PM review",
-    "Code Review",
-    "Ready For Review",
-    "Resolved",
-    "Closed",
-    "Cannot Reproduce",
-    "Fixed",
-]
-
-
-def _build_unassigned_query(project: str) -> str:
-    """
-    Build the YouTrack search query for unassigned open issues.
-
-    Equivalent UI query:
-        project: MyProject Assignee: Unassigned
-        State: -Done, -{In Progress}, -{In review}, ...
-
-    Each multi-word state must be wrapped in braces: -{In Progress}
-    Single-word states are also wrapped for consistency.
-    """
-    exclude_clauses = " ".join(
-        f"-{{{s}}}" for s in _UNASSIGNED_EXCLUDE_STATES
-    )
-    return (
-        f"project: {{{project}}} "
-        f"Assignee: Unassigned "
-        f"State: {exclude_clauses}"
-    )
-
-
-def _fetch_unassigned_issues(project: str) -> tuple[list[dict], str | None]:
-    """
-    Fetch unassigned open issues, excluding resolved/done/in-progress states.
-    Returns (issues, error_message).  Sorted newest-updated first.
-    """
-    if not project:
-        return [], "default_project is not configured"
-    query = _build_unassigned_query(project)
-    return _fetch_issues_list(query, top=200)
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — fetch ALL issues for a project
-# ---------------------------------------------------------------------------
-
-def _fetch_all_project_issues(project: str) -> tuple[list[dict], str | None]:
-    """
-    Fetch ALL unresolved issues for the given project (any assignee).
-    Returns (issues, error_message).  Sorted newest-updated first.
-
-    NOTE: Does NOT wrap single-word project names in braces.
-    {PROJ} causes HTTP 400 on standard YouTrack REST endpoints.
-    Only multi-word project names need braces, e.g. {My Project}.
-    """
-    if not project:
-        return [], "default_project is not configured"
-    proj_token = f"{{{project}}}" if " " in project else project
-    query = f"project: {proj_token} #Unresolved"
-    return _fetch_issues_list(query, top=500)
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — my recently resolved / closed issues
-# ---------------------------------------------------------------------------
-
-# Finished-state keywords (case-insensitive substring match on State name).
-# Used as a client-side safety net when #Resolved is unavailable / too broad.
-_FINISHED_STATE_HINTS: tuple[str, ...] = (
-    "done",
-    "closed",
-    "resolved",
-    "fixed",
-    "won't fix",
-    "wont fix",
-    "duplicate",
-    "obsolete",
-    "cancelled",
-    "canceled",
-    "rejected",
-    "cannot reproduce",
-    "complete",
-    "finished",
-    "declined",
-)
-
-
-def _is_finished_state(state: str) -> bool:
-    s = (state or "").strip().lower()
-    if not s:
-        return False
-    return any(h in s for h in _FINISHED_STATE_HINTS)
-
-
-def _issue_updated_ms(issue: dict) -> int:
-    try:
-        return int(issue.get("updated") or issue.get("created") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _issue_updated_label(issue: dict) -> str:
-    ms = _issue_updated_ms(issue)
-    if not ms:
-        return ""
-    try:
-        return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
-    except (ValueError, OSError, OverflowError):
-        return ""
-
-
-def _fetch_my_recently_resolved(
-    project: str,
-) -> tuple[list[dict], str | None]:
-    """
-    Resolved / closed issues assigned to me in ``project``, newest-updated first.
-
-    Prefer YouTrack ``#Resolved`` (all workflow states marked resolved). Fall back
-    to an explicit State list if that query is rejected.
-    """
-    if not project:
-        return [], "default_project is not configured"
-    proj_token = _yt_query_token(project)
-
-    # #Resolved = all states in the "resolved" category for the project.
-    # for: me   = currently assigned to the authenticated user.
-    primary = f"project: {proj_token} #Resolved for: me"
-    issues, err = _fetch_issues_list(primary, top=200)
-    used_resolved_tag = not (err and not issues)
-    if err and "400" in err:
-        # Older / custom workflows: list common finished state names.
-        state_clause = " ".join(
-            f"{{{s}}}"
-            for s in (
-                "Done",
-                "Resolved",
-                "Closed",
-                "Fixed",
-                "Cannot Reproduce",
-                "Won't fix",
-                "Duplicate",
-                "Obsolete",
-                "Cancelled",
-                "Canceled",
-            )
-        )
-        fallback = (
-            f"project: {proj_token} for: me State: {state_clause}"
-        )
-        issues, err = _fetch_issues_list(fallback, top=200)
-        used_resolved_tag = False
-
-    if err and not issues:
-        return [], err
-
-    # When falling back to an explicit State list, drop anything that still
-    # looks open. With #Resolved, trust YouTrack's resolved category.
-    if not used_resolved_tag:
-        filtered: list[dict] = []
-        for issue in issues or []:
-            if not isinstance(issue, dict):
-                continue
-            parsed = _parse_youtrack_issue(issue)
-            state = parsed.get("state") or ""
-            if state and not _is_finished_state(state):
-                continue
-            filtered.append(issue)
-        issues = filtered
-
-    issues = [i for i in (issues or []) if isinstance(i, dict)]
-    issues.sort(key=_issue_updated_ms, reverse=True)
-    return issues, None
-
-
-def _yt_query_token(value: str) -> str:
-    """Brace-wrap a YouTrack query token when it contains spaces / special chars."""
-    v = (value or "").strip()
-    if not v:
-        return v
-    if any(ch in v for ch in " \t:{}()"):
-        return "{" + v.replace("}", "") + "}"
-    return v
-
-
-def _fetch_issues_assigned_to(
-    project: str, login: str
-) -> tuple[list[dict], str | None]:
-    """
-    Unresolved issues in project assigned to ``login`` (YouTrack ``for:``).
-    """
-    if not project:
-        return [], "default_project is not configured"
-    login = (login or "").strip().lstrip("@")
-    if not login:
-        return _fetch_all_project_issues(project)
-    proj_token = _yt_query_token(project)
-    login_token = _yt_query_token(login)
-    query = f"project: {proj_token} #Unresolved for: {login_token}"
-    return _fetch_issues_list(query, top=500)
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — users (for @assignee filter)
-# ---------------------------------------------------------------------------
-
-_users_cache_lock = threading.Lock()
-_USERS_CACHE: list[dict] | None = None
-
-
-def _invalidate_users_cache() -> None:
-    global _USERS_CACHE
-    with _users_cache_lock:
-        _USERS_CACHE = None
-
-
-def _assignees_from_issues(issues: list[dict] | None) -> list[dict]:
-    """
-    Unique assignees found on the given issues (project-scoped).
-    Returns list of {login, fullName} sorted by login.
-    """
-    by_key: dict[str, dict] = {}
-    for issue in issues or []:
-        if not isinstance(issue, dict):
-            continue
-        parsed = _parse_youtrack_issue(issue)
-        login = (parsed.get("assignee_login") or "").strip()
-        if not login:
-            continue
-        full = (parsed.get("assignee") or "").strip()
-        if full.lower() == login.lower():
-            full = ""
-        key = login.lower()
-        prev = by_key.get(key)
-        if prev is None:
-            by_key[key] = {"login": login, "fullName": full}
-        elif full and not prev.get("fullName"):
-            prev["fullName"] = full
-    users = list(by_key.values())
-    users.sort(key=lambda x: (x["login"] or "").lower())
-    return users
-
-
-def _fetch_youtrack_users(
-    query: str = "",
-) -> tuple[list[dict], str | None]:
-    """
-    List YouTrack users (instance-wide) for typed-login resolve fallback.
-    Prefer ``_assignees_from_issues`` for project-scoped assignee panels.
-    Returns list of {login, fullName}, error.
-    """
-    global _USERS_CACHE
-    q = (query or "").strip().lstrip("@").lower()
-
-    with _users_cache_lock:
-        cached = list(_USERS_CACHE) if _USERS_CACHE is not None else None
-
-    if cached is None:
-        # Prefer active users; fall back to bare /users if banned filter fails.
-        result = _yt_request(
-            "GET",
-            "/users",
-            params="fields=login,fullName,banned&$top=200",
-        )
-        if result is None or _is_api_error(result):
-            result = _yt_request(
-                "GET",
-                "/users",
-                params="fields=login,fullName&$top=200",
-            )
-        if result is None:
-            return [], "Could not load YouTrack users (check token / network)"
-        if _is_api_error(result):
-            desc = ""
-            if isinstance(result, dict):
-                desc = str(result.get("description") or result.get("status") or "")
-            return [], desc or "YouTrack users request failed"
-        if not isinstance(result, list):
-            return [], "Unexpected users response from YouTrack"
-
-        users: list[dict] = []
-        for u in result:
-            if not isinstance(u, dict):
-                continue
-            if u.get("banned") is True:
-                continue
-            login = (u.get("login") or "").strip()
-            if not login or login.startswith("guest"):
-                continue
-            users.append(
-                {
-                    "login": login,
-                    "fullName": (u.get("fullName") or "").strip(),
-                }
-            )
-        users.sort(key=lambda x: (x["login"] or "").lower())
-        with _users_cache_lock:
-            _USERS_CACHE = users
-        cached = users
-
-    if not q:
-        return list(cached), None
-
-    filtered = [
-        u
-        for u in cached
-        if q in (u.get("login") or "").lower()
-        or q in (u.get("fullName") or "").lower()
-    ]
-    return filtered, None
-
-
-# ---------------------------------------------------------------------------
-# Fetch parent issue info
-# ---------------------------------------------------------------------------
-
-_PARENT_FIELDS = (
-    "idReadable,"
-    "summary,"
-    "customFields(name,value(login,fullName,name))"
-)
-
-
-def _fetch_parent_info(ticket_id: str) -> tuple[str | None, str | None]:
-    result = _yt_request(
-        "GET",
-        f"/issues/{quote(ticket_id)}",
-        params=f"fields={quote(_PARENT_FIELDS)}",
-    )
-    if not result or result is _NOT_FOUND or _is_api_error(result):
-        return None, None
-    if not isinstance(result, dict):
-        return None, None
-
-    summary = result.get("summary") or ""
-    parsed  = _parse_youtrack_issue(result)
-    assignee_login = parsed.get("assignee_login") or ""
-    return summary or None, assignee_login or None
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — add comment to issue
-# ---------------------------------------------------------------------------
-
-def _yt_add_comment(ticket_id: str, text: str) -> bool:
-    """
-    POST a plain-text comment to a YouTrack issue.
-    Required permission: Create Comment.
-    Returns True on success, False on any error.
-    """
-    if not text.strip():
-        return False
-    result = _yt_request(
-        "POST",
-        f"/issues/{quote(ticket_id)}/comments",
-        body={"text": text},
-        params="fields=id,text",
-    )
-    ok = (
-        result is not None
-        and result is not _NOT_FOUND
-        and not _is_api_error(result)
-    )
-    if ok:
-        log.info("YouTrack: comment added to %s", ticket_id)
-    else:
-        log.warning("YouTrack: failed to add comment to %s", ticket_id)
-    return ok
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — apply command (state transitions)
-# ---------------------------------------------------------------------------
-
-def _yt_apply_command(ticket_id: str, command: str) -> bool:
-    """
-    Apply a YouTrack command string to an issue (e.g. "State In Review", "Done").
-    Returns True on success.
-    """
-    result = _yt_request(
-        "POST",
-        "/commands",
-        body={
-            "query":  command,
-            "issues": [{"idReadable": ticket_id}],
-            "silent": False,
-        },
-    )
-    ok = (
-        result is not None
-        and result is not _NOT_FOUND
-        and not _is_api_error(result)
-    )
-    if ok:
-        log.info("YouTrack: applied command '%s' to %s", command, ticket_id)
-    else:
-        log.warning("YouTrack: failed to apply command '%s' to %s", command, ticket_id)
-    return ok
-
-
-# ---------------------------------------------------------------------------
-# Severity sort
-# ---------------------------------------------------------------------------
-
-_SEVERITY_RANK: dict[str, int] = {
-    "blocker":      0,
-    "critical":     0,
-    "show-stopper": 0,
-    "showstopper":  0,
-    "major":        1,
-    "normal":       2,
-    "minor":        3,
-    "cosmetic":     4,
-    "trivial":      4,
-}
-
-
-def _issue_severity_rank(issue: dict) -> int:
-    for cf in issue.get("customFields") or []:
-        name  = (cf.get("name") or "").lower()
-        value = cf.get("value")
-        if value is None:
-            continue
-        if name in ("priority", "severity"):
-            val_name = ""
-            if isinstance(value, dict):
-                val_name = (
-                    value.get("name") or value.get("presentation") or ""
-                ).lower()
-            elif isinstance(value, str):
-                val_name = value.lower()
-            rank = _SEVERITY_RANK.get(val_name)
-            if rank is not None:
-                return rank
-    return 2
-
-
-def _sort_issues_by_severity(issues: list[dict]) -> list[dict]:
-    return sorted(issues, key=_issue_severity_rank)
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — set issue Done
-# ---------------------------------------------------------------------------
-
-def _set_youtrack_done(ticket_id: str) -> None:
-    ok = _yt_apply_command(ticket_id, "Done")
-    if ok:
-        sublime.set_timeout(
-            lambda: sublime.status_message(
-                f"Notes: YouTrack {ticket_id} -> Done"
-            ),
-            0,
-        )
-    else:
-        sublime.set_timeout(
-            lambda: sublime.status_message(
-                f"Notes: WARNING - could not set {ticket_id} Done in YouTrack"
-            ),
-            0,
-        )
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — set issue In Review
-# ---------------------------------------------------------------------------
-
-def _set_youtrack_in_review(ticket_id: str) -> None:
-    ok = _yt_apply_command(ticket_id, "State In Review")
-    if ok:
-        sublime.set_timeout(
-            lambda: sublime.status_message(
-                f"Notes: YouTrack {ticket_id} -> In Review"
-            ),
-            0,
-        )
-    else:
-        sublime.set_timeout(
-            lambda: sublime.status_message(
-                f"Notes: WARNING - could not set {ticket_id} In Review in YouTrack"
-            ),
-            0,
-        )
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — project lookup
-# ---------------------------------------------------------------------------
-
-def _yt_get_project_id(short_name: str) -> str | None:
-    result = _yt_request(
-        "GET",
-        "/admin/projects",
-        params=f"fields=id,shortName,name&query={quote(short_name)}",
-    )
-    if not result or not isinstance(result, list):
-        return None
-    for proj in result:
-        if (proj.get("shortName") or "").upper() == short_name.upper():
-            return proj.get("id")
-    if result:
-        return result[0].get("id")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — subtask linking
-# ---------------------------------------------------------------------------
-
-def _yt_get_subtask_link_id(parent_id: str) -> str | None:
-    result = _yt_request(
-        "GET",
-        f"/issues/{quote(parent_id)}/links",
-        params="fields=id,direction,linkType(name,localizedName,sourceToTarget,targetToSource)",
-    )
-    if not result or not isinstance(result, list):
-        return None
-    for link in result:
-        link_type = link.get("linkType") or {}
-        type_name = (
-            link_type.get("name") or link_type.get("localizedName") or ""
-        ).lower()
-        direction = (link.get("direction") or "").upper()
-        if direction == "OUTWARD" and any(
-            kw in type_name for kw in ("parent", "subtask", "child")
-        ):
-            return link.get("id")
-    for link in result:
-        link_type = link.get("linkType") or {}
-        type_name = (
-            link_type.get("name") or link_type.get("localizedName") or ""
-        ).lower()
-        if "subtask" in type_name or "parent" in type_name:
-            return link.get("id")
-    return None
-
-
-def _yt_link_as_subtask(parent_id: str, child_id: str) -> bool:
-    link_id = _yt_get_subtask_link_id(parent_id)
-    if not link_id:
-        log.warning(
-            "YouTrack: no subtask link type found for %s; "
-            "child %s created as standalone",
-            parent_id, child_id,
-        )
-        return False
-
-    result = _yt_request(
-        "POST",
-        f"/issues/{quote(parent_id)}/links/{quote(link_id)}/issues",
-        body={"idReadable": child_id},
-        params="fields=idReadable",
-    )
-    ok = (
-        result is not None
-        and result is not _NOT_FOUND
-        and not _is_api_error(result)
-    )
-    if ok:
-        log.info("YouTrack: linked %s as subtask of %s", child_id, parent_id)
-    else:
-        log.warning(
-            "YouTrack: could not link %s as subtask of %s", child_id, parent_id
-        )
-    return ok
-
-
-# ---------------------------------------------------------------------------
-# YouTrack — issue creation
-# ---------------------------------------------------------------------------
-
-class IssueCreateError(Exception):
-    def __init__(self, message: str, assignee_error: bool = False) -> None:
-        super().__init__(message)
-        self.assignee_error = assignee_error
-
-
-def _yt_create_issue(
-    project_short: str,
-    summary: str,
-    description: str,
-    assignee_login: str,
-) -> str:
-    project_id = _yt_get_project_id(project_short)
-    if not project_id:
-        raise IssueCreateError(
-            f"Project '{project_short}' not found.\n"
-            "Check the project shortName and token Read Project permission."
-        )
-
-    custom_fields = []
-    if assignee_login:
-        custom_fields.append({
-            "name":  "Assignee",
-            "$type": "SingleUserIssueCustomField",
-            "value": {"login": assignee_login},
-        })
-
-    body: dict = {
-        "project": {"id": project_id},
-        "summary": summary,
-    }
-    if description:
-        body["description"] = description
-    if custom_fields:
-        body["customFields"] = custom_fields
-
-    result = _yt_request(
-        "POST",
-        "/issues",
-        body=body,
-        params="fields=id,idReadable,summary",
-    )
-
-    if (
-        result
-        and isinstance(result, dict)
-        and not _is_api_error(result)
-        and result is not _NOT_FOUND
-    ):
-        ticket_id = result.get("idReadable")
-        if ticket_id:
-            return ticket_id
-        raise IssueCreateError("Issue created but no idReadable returned.")
-
-    if _is_api_error(result):
-        api_err = result  # type: ignore[assignment]
-        status  = api_err.get("status", 0)
-        desc    = api_err.get("description", "")
-
-        if assignee_login and status in (400, 404):
-            body_no_assignee: dict = {
-                "project": {"id": project_id},
-                "summary": summary,
-            }
-            if description:
-                body_no_assignee["description"] = description
-            retry = _yt_request(
-                "POST",
-                "/issues",
-                body=body_no_assignee,
-                params="fields=id,idReadable,summary",
-            )
-            if (
-                retry
-                and isinstance(retry, dict)
-                and not _is_api_error(retry)
-                and retry is not _NOT_FOUND
-                and retry.get("idReadable")
-            ):
-                orphan_id = retry.get("idReadable")
-                raise IssueCreateError(
-                    f"Assignee login '{assignee_login}' does not exist in YouTrack.\n\n"
-                    f"The issue was created as {orphan_id} without an assignee.\n"
-                    f"Please set the assignee manually in YouTrack.",
-                    assignee_error=True,
-                )
-            raise IssueCreateError(
-                f"HTTP {status} from YouTrack.\n\nDetails: {desc}\n\n"
-                "Check: token permissions, project access, custom field values."
-            )
-
-        if status == 403:
-            raise IssueCreateError(
-                "Permission denied (HTTP 403).\n\n"
-                "The API token does not have 'Create Issue' permission.\n"
-                "Go to YouTrack -> Profile -> Authentication -> Permanent Tokens\n"
-                "and ensure the token scope includes 'YouTrack' or 'Create Issue'."
-            )
-
-        raise IssueCreateError(
-            f"YouTrack API error HTTP {status}.\n\nDetails: {desc}"
-        )
-
-    raise IssueCreateError(
-        "Could not create issue: no response from YouTrack.\n"
-        "Check your network connection and youtrack_base URL."
-    )
-
 
 # ---------------------------------------------------------------------------
 # Popup HTML helpers
 # ---------------------------------------------------------------------------
-
-def _h(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-    )
 
 
 def _state_color(state: str) -> str:
@@ -1915,11 +526,11 @@ def _build_hover_html(
         f"&#128279; {_h(label_txt)}</a>"
         f"</div>"
     )
-    sep = "<div style='border-top:1px solid #3e4451;margin:4px 0 6px 0'></div>"
+    sep = f"<div style='{_hover_sep_style()}'></div>"
 
     if not_found:
         body = (
-            "<div style='white-space:pre;line-height:1.7'>"
+            f"<div style='{_hover_pre_style()}'>"
             "<span style='color:#e06c75'>x  Not found</span>\n"
             f"<span style='color:#5c6370'>No issue matching </span>"
             f"<span style='color:#abb2bf'>{_h(ticket_id)}</span>"
@@ -1928,7 +539,7 @@ def _build_hover_html(
         )
         return (
             "<body id='stnotes-hover' "
-            "style='margin:8px 12px;font-family:monospace;font-size:0.9em'>"
+            f"style='{_hover_body_style()}'>"
             + link_html + sep + body
             + "</body>"
         )
@@ -1936,7 +547,7 @@ def _build_hover_html(
     if info is None:
         return (
             "<body id='stnotes-hover' "
-            "style='margin:8px 12px;font-family:monospace'>"
+            f"style='{_hover_body_style()}'>"
             + link_html
             + "</body>"
         )
@@ -1983,10 +594,10 @@ def _build_hover_html(
 
     return (
         "<body id='stnotes-hover' "
-        "style='margin:8px 12px;font-family:monospace;font-size:0.9em'>"
+        f"style='{_hover_body_style()}'>"
         + link_html
         + sep
-        + f"<div style='white-space:pre;line-height:1.7'>{rows_html}</div>"
+        + f"<div style='{_hover_pre_style()}'>{rows_html}</div>"
         + "</body>"
     )
 
@@ -2028,8 +639,6 @@ def _format_bullet_body(description: str) -> str:
     tag = description.strip().upper()
     if tag == "DONE":
         return "[DONE]<<-"
-    if tag == "EVAL":
-        return "[EVAL]"
     if tag == "CREATED":
         return "[CREATED]"
     if tag == "REVIEW":
@@ -2066,6 +675,7 @@ def _insert_entries_for_ticket(ticket_id: str, entries: list[str]) -> None:
             new_section.append("")
         lines = new_section + lines
         _write_notes(lines)
+        _reload_open_journal_views()
         return
 
     ticket_last = _find_ticket_in_section(
@@ -2085,6 +695,7 @@ def _insert_entries_for_ticket(ticket_id: str, entries: list[str]) -> None:
             lines.insert(ticket_last + 1 + offset, entry)
 
     _write_notes(lines)
+    _reload_open_journal_views()
 
 
 def add_note(ticket_id: str, description: str) -> None:
@@ -2117,51 +728,163 @@ def add_note_raw(ticket_id: str, raw_entry: str) -> None:
         _insert_entries_for_ticket(ticket_id, chunk)
 
 
+def _reload_open_journal_views() -> None:
+    try:
+        path = os.path.realpath(_notes_file())
+    except OSError:
+        return
+    for window in sublime.windows():
+        for view in window.views():
+            fname = view.file_name() or ""
+            if not fname:
+                continue
+            try:
+                if os.path.realpath(fname) != path:
+                    continue
+            except OSError:
+                continue
+            was_ro = view.is_read_only()
+            if was_ro:
+                view.set_read_only(False)
+            view.run_command("revert")
+            _protect_journal_view(view)
+
+
+def _replace_note_in_journal(
+    orig_ticket: str,
+    orig_date_iso: str,
+    new_ticket: str,
+    description: str,
+) -> None:
+    entries = _build_entries(description) if (description or "").strip() else []
+    date = _pure.parse_journal_date_iso(orig_date_iso)
+    if date is None:
+        today = datetime.now().date()
+        date = (today.year, today.month, today.day)
+    with _notes_io_lock:
+        lines = _read_notes(force=True)
+        loc = _pure.find_journal_block_by_date_ticket(lines, date, orig_ticket)
+        if loc is None:
+            raise RuntimeError(
+                f"Could not find # {orig_ticket}: on {orig_date_iso or 'that day'}."
+            )
+        start, end = loc
+        lines = _pure.replace_journal_ticket_block(
+            lines, start, end, new_ticket, entries
+        )
+        _write_notes(lines)
+    _reload_open_journal_views()
+
+
 # ---------------------------------------------------------------------------
 # Notes: Add — multi-line description scratch + commit
 # ---------------------------------------------------------------------------
 
-_ADD_DESC_HEADER = (
-    "# Notes: Add description — one bullet per line\n"
-    "# Save / commit: Cmd+Enter (Mac) or Ctrl+Enter, or Command Palette:\n"
-    "#   Notes: Commit Description\n"
-    "# Cancel: close this tab without committing\n"
-    "# Magic single-line tags: DONE | REVIEW | EVAL | CREATED\n"
-    "#\n"
-)
+_ADD_SKIP_TICKETS = frozenset({_TODO_ID, _OPS_ID, "EXAMPLE"})
+
+_SLICE_COMMIT_HINT = "Cmd+Shift+Enter (Mac) / Ctrl+Shift+Enter (Win/Linux)"
+
+
+def _build_note_slice_text(
+    ticket_id: str,
+    body_lines: list[str] | None,
+    *,
+    replace: bool,
+) -> str:
+    tid = (ticket_id or "").strip()
+    body = "\n".join(body_lines or []).rstrip()
+    if not body:
+        body = "- "
+    mode = (
+        "Commit replaces this header's block on that calendar day."
+        if replace
+        else "Commit creates the header under today if needed, then appends bullets."
+    )
+    return (
+        "# .notes note\n"
+        f"# Commit: {_SLICE_COMMIT_HINT}   ·   Cancel: close tab\n"
+        "# Alt+Up / Alt+Down cycles header name and bullets\n"
+        f"# {mode}\n"
+        "# topic: any journal header — PROJ-1234, TODO, standup, or a short phrase\n"
+        "# Body: one bullet per line. Tags: DONE | REVIEW | CREATED\n"
+        "#\n"
+        f"topic: {tid}\n"
+        "---\n"
+        f"{body}\n"
+    )
 
 
 def _open_add_description_scratch(window: sublime.Window, ticket_id: str) -> None:
+    _open_note_slice(
+        window, ticket_id, [], replace=False, allow_yt_comment=True
+    )
+
+
+def _open_note_slice(
+    window: sublime.Window,
+    ticket_id: str,
+    body_lines: list[str] | None,
+    *,
+    replace: bool,
+    orig_ticket: str = "",
+    orig_date: str = "",
+    allow_yt_comment: bool = False,
+) -> None:
+    tid = (ticket_id or "").strip()
+    content = _build_note_slice_text(tid, body_lines, replace=replace)
+    name = f".notes note · {tid}" if tid else ".notes note"
     view = window.new_file()
-    view.set_name(f"Notes: Add — {ticket_id}")
+    view.set_name(name)
     view.set_scratch(True)
-    view.settings().set("stnotes_add_description", True)
-    view.settings().set("stnotes_add_ticket_id", ticket_id)
-    view.settings().set("stnotes_view_name", f"Notes: Add — {ticket_id}")
-    view.run_command("notes_insert_text", {"text": _ADD_DESC_HEADER})
-    # Place caret after the instruction header
-    end = view.size()
-    view.sel().clear()
-    view.sel().add(sublime.Region(end))
-    view.show(end)
+    view.settings().set("stnotes_slice", True)
+    view.settings().set("stnotes_slice_kind", "note")
+    view.settings().set("stnotes_view_name", name)
+    view.settings().set("stnotes_add_ticket_id", tid)
+    if replace:
+        view.settings().set("stnotes_note_replace", True)
+        view.settings().set("stnotes_note_orig_ticket", orig_ticket or tid)
+        view.settings().set("stnotes_note_orig_date", orig_date or "")
+    else:
+        view.settings().set("stnotes_add_description", True)
+        view.settings().set("stnotes_allow_yt_comment", bool(allow_yt_comment))
+    view.run_command("notes_insert_text", {"text": content})
+    try:
+        text = view.substr(sublime.Region(0, view.size()))
+        regions = _pure.slice_field_regions(text, kind="note")
+        pick = None
+        if replace and len(regions) > 1:
+            pick = regions[1]
+        elif not tid and regions:
+            pick = regions[0]
+        elif regions:
+            pick = regions[-1]
+        if pick:
+            a, b = pick
+            view.sel().clear()
+            view.sel().add(sublime.Region(a, b))
+            view.show(a)
+    except Exception:
+        pass
     _assign_stnotes_syntax(view)
     sublime.status_message(
-        f"Notes: type description for {ticket_id}, then Cmd/Ctrl+Enter to commit"
+        f"Notes: fill note slice, then {_SLICE_COMMIT_HINT}"
     )
 
 
-def _extract_description_from_add_view(view: sublime.View) -> str:
+def _extract_description_from_add_view(view: sublime.View) -> tuple[str, str]:
     text = view.substr(sublime.Region(0, view.size()))
-    return "\n".join(
-        line for line in text.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    )
+    ticket, desc = _pure.parse_note_slice(text)
+    if not ticket:
+        ticket = str(view.settings().get("stnotes_add_ticket_id") or "").strip()
+    return ticket, desc
 
 
 def _finish_add_description(
     window: sublime.Window,
     ticket_id: str,
     raw: str,
+    *,
+    allow_yt_comment: bool = False,
 ) -> None:
     desc = (raw or "").strip()
     if not desc:
@@ -2186,9 +909,13 @@ def _finish_add_description(
         )
         return
 
-    if ticket_id in (_TODO_ID, _OPS_ID) or not (
+    if not allow_yt_comment:
+        return
+    if ticket_id.casefold() in {_TODO_ID.casefold(), _OPS_ID.casefold()} or not (
         _youtrack_token() and _youtrack_base()
     ):
+        return
+    if not _pure.is_youtrack_issue_id(ticket_id):
         return
 
     # Magic YouTrack transitions only for a single-line DONE/REVIEW.
@@ -2244,6 +971,473 @@ def _post_yt_comment_async(ticket_id: str, text: str) -> None:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# Create Issue — edit-slice form (replaces sequential input panels)
+# ---------------------------------------------------------------------------
+
+def _expand_issue_template(template: str, summary: str, stage: str = "") -> str:
+    return _pure.expand_issue_template(template, summary, stage=stage)
+
+
+def _parse_create_issue_slice(text: str) -> dict:
+    return _pure.parse_create_issue_slice(text)
+
+
+def _default_create_issue_subtask_lines() -> list[str]:
+    stages = _issue_stages() or ["Design", "Dev", "QA", "Deploy"]
+    return [f"- {s} | $name - {s}" for s in stages]
+
+
+def _issue_slice_oneline(text: str) -> str:
+    return " ".join((text or "").replace("\r\n", "\n").split())
+
+
+def _build_issue_slice_text(fields: dict | None = None) -> str:
+    f = fields or {}
+    project = (f.get("project") or _default_project() or "PROJECT").strip()
+    subtasks = (f.get("subtasks_text") or "").rstrip()
+    if not subtasks:
+        subtasks = "\n".join(_default_create_issue_subtask_lines())
+    ticket = (f.get("ticket") or "").strip()
+    assignee = f.get("assignee")
+    if assignee is None:
+        assignee = _cached_assignee_display()
+    return (
+        "# .notes issue\n"
+        f"# Commit: {_SLICE_COMMIT_HINT}   ·   Cancel: close tab\n"
+        "# Alt+Up / Alt+Down cycles fields (same as other slices)\n"
+        "#\n"
+        "# ticket:      read-only (YouTrack assigns on create; import fills it)\n"
+        "# project:     YouTrack shortName (required to create)\n"
+        "# summary:     title; also fills $summary / $name in sub-task titles\n"
+        "# description: multiline — extra lines indented two spaces\n"
+        "# assignee:    email or login; empty = unassigned\n"
+        "# reporter:    author (informational on import; not sent on create)\n"
+        "# due:         YYYY-MM-DD (informational on import)\n"
+        "# state / priority: informational on import\n"
+        "# parent:      empty = new parent from summary; or PROJ-1234 for children only\n"
+        "# stages:      true = create sub-tasks listed below; false = one issue\n"
+        "#\n"
+        "# Below ---: new issue sub-tasks when stages: true, or a journal note\n"
+        "# for an existing ticket (import). One bullet per line.\n"
+        f"ticket: {ticket}\n"
+        f"project: {project}\n"
+        f"summary: {_issue_slice_oneline(f.get('summary') or '')}\n"
+        f"{_pure.format_create_issue_description(f.get('description') or '')}\n"
+        f"assignee: {_issue_slice_oneline(str(assignee or ''))}\n"
+        f"reporter: {_issue_slice_oneline(f.get('reporter') or '')}\n"
+        f"due: {_issue_slice_oneline(f.get('due') or '')}\n"
+        f"state: {_issue_slice_oneline(f.get('state') or '')}\n"
+        f"priority: {_issue_slice_oneline(f.get('priority') or '')}\n"
+        f"parent: {_issue_slice_oneline(f.get('parent') or '')}\n"
+        f"stages: {f.get('stages') or 'false'}\n"
+        "---\n"
+        f"{subtasks}\n"
+    )
+
+
+def _open_issue_slice(
+    window: sublime.Window,
+    fields: dict | None = None,
+    *,
+    select: str = "summary",
+    fill_assignee: bool = True,
+) -> None:
+    if not _youtrack_token() or not _youtrack_base():
+        _error_message(
+            "Notes - YouTrack not configured.\n\n"
+            "Run 'Notes - Settings' and set:\n"
+            '  "youtrack_base":  "https://youtrack.example.com/issue/"\n'
+            '  "youtrack_token": "<your permanent token>"'
+        )
+        return
+    base_err = _validate_youtrack_base(_youtrack_base())
+    if base_err:
+        _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
+        return
+    content = _build_issue_slice_text(fields)
+    ticket = ((fields or {}).get("ticket") or "").strip()
+    name = f".notes issue · {ticket}" if ticket else ".notes issue"
+    view = window.new_file()
+    view.set_name(name)
+    view.set_scratch(True)
+    view.settings().set("stnotes_create_issue", True)
+    view.settings().set("stnotes_slice", True)
+    view.settings().set("stnotes_slice_kind", "create_issue")
+    view.settings().set("stnotes_view_name", name)
+    view.settings().set("stnotes_issue_ticket", ticket)
+    if ticket:
+        view.settings().set("stnotes_issue_existing", True)
+    view.run_command("notes_insert_text", {"text": content})
+    try:
+        text = view.substr(sublime.Region(0, view.size()))
+        m = re.search(rf"(?m)^{re.escape(select)}:\s*", text)
+        if m:
+            pt = m.end()
+            view.sel().clear()
+            view.sel().add(sublime.Region(pt, pt))
+            view.show(pt)
+    except Exception:
+        pass
+    _assign_stnotes_syntax(view)
+    sublime.status_message(f"Notes: fill issue slice, then {_SLICE_COMMIT_HINT}")
+    if fill_assignee and not ((fields or {}).get("assignee") or "").strip():
+        sublime.set_timeout_async(lambda vid=view.id(): _fill_create_issue_assignee_async(vid), 0)
+
+
+def _open_create_issue_slice(window: sublime.Window) -> None:
+    _open_issue_slice(window, select="summary", fill_assignee=True)
+
+
+def _slice_fields_from_youtrack(raw: dict | None, stub: dict | None, ticket_id: str) -> dict:
+    parsed = _parse_youtrack_issue(raw) if raw else {}
+    stub_p = stub or {}
+    desc = parsed.get("description") or stub_p.get("description") or ""
+    return {
+        "ticket": ticket_id,
+        "project": parsed.get("project") or stub_p.get("project") or _default_project(),
+        "summary": parsed.get("summary") or stub_p.get("summary") or "",
+        "description": desc,
+        "assignee": parsed.get("assignee") or stub_p.get("assignee") or "",
+        "reporter": parsed.get("reporter") or stub_p.get("reporter") or "",
+        "due": parsed.get("due") or "",
+        "state": parsed.get("state") or stub_p.get("state") or "",
+        "priority": parsed.get("priority") or stub_p.get("priority") or "",
+        "stages": "false",
+        "subtasks_text": "- \n",
+    }
+
+
+def _open_imported_issue_slice(window: sublime.Window, ticket_id: str, stub: dict | None = None) -> None:
+    sublime.status_message(f"Notes: loading {ticket_id} from YouTrack...")
+
+    def work() -> None:
+        raw = None
+        try:
+            raw = _fetch_youtrack_issue(ticket_id)
+        except Exception:
+            log.exception("YouTrack fetch for import slice failed")
+        fields = _slice_fields_from_youtrack(raw, stub, ticket_id)
+        sublime.set_timeout(
+            lambda: _open_issue_slice(
+                window, fields, select="summary", fill_assignee=False
+            ),
+            0,
+        )
+
+    sublime.set_timeout_async(work, 0)
+
+
+def _fill_create_issue_assignee_async(view_id: int) -> None:
+    if _cached_assignee_display():
+        return
+    email = _default_assignee_display()
+    if not email:
+        return
+
+    def apply() -> None:
+        for window in sublime.windows():
+            for v in window.views():
+                if v.id() == view_id and v.is_valid():
+                    v.run_command(
+                        "notes_fill_create_issue_assignee", {"value": email}
+                    )
+                    return
+
+    sublime.set_timeout(apply, 0)
+
+
+def _yt_lookup_user_login(raw: str) -> str:
+    """Resolve email or login to a YouTrack user login (empty if unset)."""
+    val = (raw or "").strip()
+    if not val:
+        return ""
+    if val.lower() in ("me", "myself", "self"):
+        user = _fetch_current_user()
+        return (user.get("login") or "").strip()
+
+    def _from_list(rows: object, needle: str) -> str:
+        if not isinstance(rows, list):
+            return ""
+        want = needle.lower()
+        exact_email = []
+        exact_login = []
+        for u in rows:
+            if not isinstance(u, dict):
+                continue
+            login = (u.get("login") or "").strip()
+            email = (u.get("email") or "").strip()
+            if email.lower() == want and login:
+                exact_email.append(login)
+            if login.lower() == want:
+                exact_login.append(login)
+        if exact_email:
+            return exact_email[0]
+        if exact_login:
+            return exact_login[0]
+        if len(rows) == 1:
+            only = rows[0]
+            if isinstance(only, dict):
+                return (only.get("login") or "").strip()
+        return ""
+
+    queries = [val]
+    if "@" in val:
+        queries.append(f"email: {val}")
+    for q in queries:
+        result = _yt_request(
+            "GET",
+            "/users",
+            params=(
+                f"fields=login,email,fullName,name"
+                f"&query={quote(q)}"
+                f"&$top=20"
+            ),
+        )
+        hit = _from_list(result, val)
+        if hit:
+            return hit
+
+    if "@" not in val:
+        result = _yt_request(
+            "GET",
+            f"/users/{quote(val)}",
+            params="fields=login,email,fullName",
+        )
+        if isinstance(result, dict) and not _is_api_error(result):
+            return (result.get("login") or val).strip()
+        return val
+
+    raise IssueCreateError(
+        f"No YouTrack user with email '{val}'.\n"
+        "Enter the address from YouTrack (Profile), or a login, or leave assignee empty."
+    )
+
+
+def _resolve_assignee_value(raw: str) -> str:
+    return _yt_lookup_user_login(raw)
+
+
+def _create_issue_job_single(
+    project: str, summary: str, description: str, assignee: str,
+) -> None:
+    try:
+        ticket_id = _yt_create_issue(project, summary, description, assignee)
+    except IssueCreateError as exc:
+        err_msg = str(exc)
+        sublime.set_timeout(
+            lambda: _error_message(f"Notes - failed to create issue:\n\n{err_msg}"), 0
+        )
+        return
+    base = _youtrack_base()
+    url = f"{base}{ticket_id}"
+
+    def _notify() -> None:
+        try:
+            add_note(ticket_id, "CREATED")
+        except Exception as exc:
+            log.warning("Could not write CREATED entry: %s", exc)
+        sublime.set_clipboard(url)
+        _message_dialog(
+            f"Issue created: {ticket_id}\nURL: {url}\n\nURL copied to clipboard."
+        )
+        sublime.status_message(f"Notes: created {ticket_id}")
+
+    sublime.set_timeout(_notify, 0)
+
+
+def _create_issue_job_with_subtasks(
+    *,
+    project: str,
+    parent_id: str | None,
+    parent_summary: str,
+    description: str,
+    assignee: str,
+    subtasks: list[tuple[str, str]],
+    create_parent: bool,
+) -> None:
+    base = _youtrack_base()
+    if create_parent:
+        try:
+            parent_id = _yt_create_issue(project, parent_summary, description, assignee)
+        except IssueCreateError as exc:
+            err_msg = str(exc)
+            sublime.set_timeout(
+                lambda: _error_message(
+                    f"Notes - failed to create parent issue:\n\n{err_msg}"
+                ),
+                0,
+            )
+            return
+    assert parent_id is not None
+    child_results: list[tuple[str, str, bool]] = []
+    for label, title_tmpl in subtasks:
+        child_summary = (
+            _expand_issue_template(title_tmpl, parent_summary, stage=label)
+            or f"{parent_summary} - {label}"
+        )
+        try:
+            child_id = _yt_create_issue(project, child_summary, "", assignee)
+            linked = _yt_link_as_subtask(parent_id, child_id)
+            child_results.append((label, child_id, linked))
+        except IssueCreateError as exc:
+            log.warning("YouTrack: failed to create sub-task '%s': %s", label, exc)
+            child_results.append((label, f"FAILED: {exc}", False))
+
+    _parent_id_snap = parent_id
+    _parent_url_snap = f"{base}{parent_id}"
+
+    def _notify() -> None:
+        ok_children = [cid for _, cid, _ in child_results if not cid.startswith("FAILED:")]
+        if ok_children:
+            child_refs = ", ".join(f"#{cid}" for cid in ok_children)
+            stage_entry = f"- [CREATED] for each stage: {child_refs}"
+            try:
+                add_note_raw(_parent_id_snap, stage_entry)
+            except Exception as exc:
+                log.warning("Could not write stage CREATED entry for %s: %s", _parent_id_snap, exc)
+        else:
+            try:
+                add_note(_parent_id_snap, "CREATED")
+            except Exception as exc:
+                log.warning("Could not write CREATED for parent %s: %s", _parent_id_snap, exc)
+        sublime.set_clipboard(_parent_url_snap)
+        msg_lines = [
+            f"Parent issue:   {_parent_id_snap}",
+            f"URL:            {_parent_url_snap}",
+            "Parent URL copied to clipboard.",
+            "",
+            "Stage sub-tasks:",
+        ]
+        for label, cid_or_err, linked in child_results:
+            if cid_or_err.startswith("FAILED:"):
+                msg_lines.append(f"  [{label}]  FAILED - {cid_or_err[7:]}")
+            else:
+                link_note = " (linked as subtask)" if linked else " (standalone)"
+                msg_lines.append(f"  [{label}]  {cid_or_err}{link_note}")
+        _message_dialog("\n".join(msg_lines))
+        sublime.status_message(
+            f"Notes: {_parent_id_snap} + {len(ok_children)}/{len(subtasks)} stage(s) created"
+        )
+
+    sublime.set_timeout(_notify, 0)
+
+
+def _commit_create_issue_view(window: sublime.Window, view: sublime.View) -> None:
+    data = _parse_create_issue_slice(view.substr(sublime.Region(0, view.size())))
+    existing = bool(view.settings().get("stnotes_issue_existing"))
+    locked = str(view.settings().get("stnotes_issue_ticket") or "").strip()
+    ticket = (locked or data.get("ticket") or "") if existing else ""
+    project = data["project"]
+    summary = data["summary"]
+    description = data["description"]
+    parent = data["parent"]
+    stages_yes = data["stages_yes"]
+    subtasks = data["subtasks"]
+
+    if ticket:
+        note_lines = [title for _lab, title in subtasks if (title or "").strip()]
+        note = "\n".join(note_lines).strip() or "IMPORTED"
+        view.set_scratch(True)
+        window.focus_view(view)
+        window.run_command("close")
+        _finish_add_description(window, ticket, note, allow_yt_comment=True)
+        return
+
+    if not project and not parent:
+        raise RuntimeError("Set project: (or parent: for sub-tasks under an existing ticket)")
+    if stages_yes and not subtasks:
+        raise RuntimeError("stages: true but no sub-tasks listed below ---")
+    if not stages_yes and not summary:
+        raise RuntimeError("summary: is required")
+    if stages_yes and not parent and not summary:
+        raise RuntimeError("summary: is required when creating a new parent")
+
+    # Persist labels from the slice so the next Create Issue reuses them
+    if stages_yes and subtasks:
+        labels = [lab for lab, _ in subtasks]
+        if labels:
+            s = _settings()
+            s.set("issue_stages", labels)
+            sublime.save_settings(_SETTINGS_FILE)
+
+    view.set_scratch(True)
+    window.focus_view(view)
+    window.run_command("close")
+
+    def _work() -> None:
+        try:
+            assignee = _resolve_assignee_value(data["assignee"])
+        except IssueCreateError as exc:
+            err_msg = str(exc)
+            sublime.set_timeout(
+                lambda m=err_msg: _error_message(f"Notes - assignee:\n\n{m}"),
+                0,
+            )
+            return
+        if stages_yes:
+            parent_summary = summary
+            create_parent = not bool(parent)
+            parent_id = parent or None
+            proj = project
+            if parent_id:
+                info = _fetch_parent_info(parent_id)
+                if not info:
+                    sublime.set_timeout(
+                        lambda: _error_message(
+                            f"Notes: parent {parent_id} not found in YouTrack.\n"
+                            "Use idReadable (PROJ-1234) or the issue URL."
+                        ),
+                        0,
+                    )
+                    return
+                parent_id = info.get("idReadable") or parent_id
+                if not parent_summary:
+                    parent_summary = (info.get("summary") or "").strip()
+                if info.get("project"):
+                    proj = info["project"]
+                elif not proj and "-" in parent_id:
+                    proj = parent_id.split("-")[0]
+            if not parent_summary:
+                sublime.set_timeout(
+                    lambda: _error_message("Notes: missing summary for parent / $summary"),
+                    0,
+                )
+                return
+            if not proj:
+                sublime.set_timeout(
+                    lambda: _error_message("Notes: set project: for new parent"),
+                    0,
+                )
+                return
+            sublime.set_timeout(
+                lambda: sublime.status_message(
+                    f"Notes: creating {len(subtasks)} sub-task(s) under {parent_id or 'new parent'}..."
+                ),
+                0,
+            )
+            _create_issue_job_with_subtasks(
+                project=proj,
+                parent_id=parent_id,
+                parent_summary=parent_summary,
+                description=description,
+                assignee=assignee,
+                subtasks=subtasks,
+                create_parent=create_parent,
+            )
+        else:
+            sublime.set_timeout(
+                lambda: sublime.status_message(
+                    f"Notes: creating {project} issue '{summary}'..."
+                ),
+                0,
+            )
+            _create_issue_job_single(project, summary, description, assignee)
+
+    sublime.set_timeout_async(_work, 0)
+
+
 class NotesCommitDescriptionCommand(sublime_plugin.WindowCommand):
     """Commit multi-line description from the Add scratch buffer."""
 
@@ -2258,16 +1452,107 @@ class NotesCommitDescriptionCommand(sublime_plugin.WindowCommand):
                 "Notes: open Notes: Add description buffer first"
             )
             return
-        ticket_id = view.settings().get("stnotes_add_ticket_id") or ""
+        ticket_id, desc = _extract_description_from_add_view(view)
         if not ticket_id:
-            _error_message("Notes: missing ticket id on description buffer")
+            _error_message("Notes: topic: is empty — set a header name then commit")
             return
-        desc = _extract_description_from_add_view(view)
+        ok, err = _pure.normalize_journal_topic(ticket_id)
+        if err or not ok:
+            _error_message(f"Notes: {err or 'invalid topic'}")
+            return
+        ticket_id = ok
+        allow_yt = bool(view.settings().get("stnotes_allow_yt_comment"))
         # Close scratch before write so user returns to previous view
         view.set_scratch(True)
         self.window.focus_view(view)
         self.window.run_command("close")
-        _finish_add_description(self.window, ticket_id, desc)
+        _finish_add_description(
+            self.window, ticket_id, desc, allow_yt_comment=allow_yt
+        )
+
+
+class NotesCommitCreateIssueCommand(sublime_plugin.WindowCommand):
+    """Command: notes_commit_create_issue | commit create-issue slice"""
+
+    def is_enabled(self) -> bool:
+        view = self.window.active_view()
+        return bool(view and view.settings().get("stnotes_create_issue"))
+
+    def run(self) -> None:
+        view = self.window.active_view()
+        if not view or not view.settings().get("stnotes_create_issue"):
+            sublime.status_message("Notes: open create-issue slice first")
+            return
+        try:
+            _commit_create_issue_view(self.window, view)
+        except RuntimeError as exc:
+            _error_message(f"Notes - create issue:\n\n{exc}")
+        except Exception as exc:
+            _error_message(f"Notes - create issue failed:\n\n{exc}")
+
+
+class NotesCommitSliceCommand(sublime_plugin.WindowCommand):
+    """Unified commit for all .notes slices (add / KB / create-issue)."""
+
+    def is_enabled(self) -> bool:
+        view = self.window.active_view()
+        return bool(view and view.settings().get("stnotes_slice"))
+
+    def run(self) -> None:
+        view = self.window.active_view()
+        if not view or not view.settings().get("stnotes_slice"):
+            sublime.status_message("Notes: no slice editor focused")
+            return
+        kind = view.settings().get("stnotes_slice_kind") or ""
+        if (
+            kind == "kb"
+            or view.settings().get("stnotes_kb_subject_edit")
+            or view.settings().get("kb_subject_edit")
+        ):
+            self.window.run_command("notes_kb_commit_subject")
+        elif kind == "create_issue" or view.settings().get("stnotes_create_issue"):
+            self.window.run_command("notes_commit_create_issue")
+        elif view.settings().get("stnotes_note_replace"):
+            self.window.run_command("notes_commit_note")
+        elif kind in ("add", "note") or view.settings().get("stnotes_add_description"):
+            self.window.run_command("notes_commit_description")
+        else:
+            sublime.status_message("Notes: unknown slice kind")
+
+
+class NotesCommitNoteCommand(sublime_plugin.WindowCommand):
+    """Commit a note slice that replaces an existing day's header block."""
+
+    def is_enabled(self) -> bool:
+        view = self.window.active_view()
+        return bool(view and view.settings().get("stnotes_note_replace"))
+
+    def run(self) -> None:
+        view = self.window.active_view()
+        if not view or not view.settings().get("stnotes_note_replace"):
+            sublime.status_message("Notes: open a note slice from View first")
+            return
+        ticket_id, desc = _extract_description_from_add_view(view)
+        orig = str(view.settings().get("stnotes_note_orig_ticket") or "").strip()
+        orig_date = str(view.settings().get("stnotes_note_orig_date") or "").strip()
+        if not ticket_id:
+            ticket_id = orig
+        ok, err = _pure.normalize_journal_topic(ticket_id)
+        if err or not ok:
+            _error_message(f"Notes: {err or 'invalid topic'}")
+            return
+        ticket_id = ok
+        view.set_scratch(True)
+        self.window.focus_view(view)
+        self.window.run_command("close")
+        try:
+            _replace_note_in_journal(orig or ticket_id, orig_date, ticket_id, desc)
+            sublime.status_message(f"Notes: updated [{ticket_id}]")
+        except RuntimeError as exc:
+            _error_message(f"Notes - could not update note:\n\n{exc}")
+        except Exception as exc:
+            log.exception("replace note failed")
+            _error_message(f"Notes - could not update note:\n\n{exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -2290,22 +1575,6 @@ def _validate_ticket_id(raw: str) -> tuple[str | None, str | None]:
 # ---------------------------------------------------------------------------
 # Scratch view helpers
 # ---------------------------------------------------------------------------
-
-def _open_scratch_view(window: sublime.Window, name: str, content: str) -> None:
-    view = window.new_file()
-    view.set_name(name)
-    view.set_scratch(True)
-    view.set_read_only(False)
-    view.settings().set("stnotes_view_name", name)
-    view.run_command("notes_insert_text", {"text": content})
-    view.set_read_only(True)
-    _assign_stnotes_syntax(view)
-
-
-def _assign_stnotes_syntax(view: sublime.View) -> None:
-    syntax = sublime.find_syntax_for_file("file.stnotes")
-    if syntax:
-        view.assign_syntax(syntax)
 
 
 # ---------------------------------------------------------------------------
@@ -2339,7 +1608,11 @@ def _build_yt_issues_section(project: str, issues: list[dict]) -> str:
 # Weekly summary helpers
 # ---------------------------------------------------------------------------
 
-_DATE_PARSE_RE = re.compile(r"^#\s+(\d{4})\.(\d{1,2})\.(\d{1,2})\s*$")
+_DATE_PARSE_RE = re.compile(
+    r"^#\s+(?:DATE:\s+)?(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})"
+    r"(?:\s+[A-Za-z][A-Za-z ,-]*)?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _parse_date_header(line: str) -> datetime_date | None:
@@ -2565,22 +1838,53 @@ def _collect_all_weeks(
 # Commands
 # ---------------------------------------------------------------------------
 
+class NotesHubCommand(sublime_plugin.WindowCommand):
+    """Command: notes_hub | Palette: .notes - Hub"""
+
+    _HELP = "__help__"
+    _WEEKLY_SUMMARY = "__weekly_summary__"
+    _WEEKLY_SEARCH = "__weekly_search__"
+
+    def run(self) -> None:
+        items = [
+            ["Getting started", "How journal slices, YouTrack, and kb: refs work"],
+            ["Weekly summary", "Scratch view of recent activity (by date)"],
+            ["Weekly search", "Search within a week window"],
+        ]
+        self._hub_keys = [self._HELP, self._WEEKLY_SUMMARY, self._WEEKLY_SEARCH]
+        self.window.show_quick_panel(
+            items,
+            self._on_hub,
+            flags=sublime.MONOSPACE_FONT,
+            selected_index=0,
+            placeholder=".notes hub — Enter selects",
+        )
+
+    def _on_hub(self, index: int) -> None:
+        if index < 0:
+            return
+        key = self._hub_keys[index]
+        if key == self._HELP:
+            self.window.run_command("notes_getting_started")
+        elif key == self._WEEKLY_SUMMARY:
+            self.window.run_command("notes_weekly_summary")
+        elif key == self._WEEKLY_SEARCH:
+            self.window.run_command("notes_weekly_search")
+
+
 class NotesAddCommand(sublime_plugin.WindowCommand):
     """
-    Command: notes_add  |  Palette: Notes - Add
+    Command: notes_add  |  Palette: .notes - Add
 
     Flow:
-      Quick panel -> [TODO, OPS, today_tickets...,
-                      + Import from YouTrack (assigned to me),
-                      + Import from YouTrack (all),
-                      + Create new issue (YouTrack)]
+      Quick panel -> today's headers, New note, YouTrack import, Issue.
 
-    '+ Import from YouTrack (assigned to me)': issues with for:me query.
-    '+ Import from YouTrack (all)': all unresolved issues in the project.
-    '+ Create new issue': full create-issue flow embedded here.
+    New note: empty journal slice (header + bullets), appends under today.
+    Issue: YouTrack create slice. Import: same issue slice, fields filled.
 
-    For all real tickets (not TODO/OPS), if post_comments is enabled and
-    YouTrack is configured, the note description is posted as a comment.
+    YouTrack comments: only if post_comments is on, the slice came from Add
+    (existing heading / Import), and the heading looks like PROJ-1234.
+    New note never comments.
     """
 
     _active: bool = False
@@ -2589,6 +1893,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
     _panel_item_ids: list[str]
 
     _ID_CREATE_ISSUE       = "__create_issue__"
+    _ID_NEW_NOTE           = "__new_note__"
     _ID_IMPORT_FROM_YT_ME  = "__import_from_yt_me__"
     _ID_IMPORT_FROM_YT_ALL = "__import_from_yt_all__"
 
@@ -2603,23 +1908,23 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
         def _make_item(tid: str, desc: str = "") -> list[str]:
             return [tid, desc] if desc else [tid]
 
-        pinned_items = [_make_item(_TODO_ID), _make_item(_OPS_ID)]
-        pinned_ids   = [_TODO_ID, _OPS_ID]
-
         regular_items = [
             _make_item(tid, desc)
             for tid, desc in today_with_desc
-            if tid not in (_TODO_ID, _OPS_ID)
+            if tid not in _ADD_SKIP_TICKETS
         ]
         regular_ids = [
             tid for tid, _ in today_with_desc
-            if tid not in (_TODO_ID, _OPS_ID)
+            if tid not in _ADD_SKIP_TICKETS
         ]
 
         yt_configured = bool(_youtrack_token() and _youtrack_base() and _default_project())
 
         action_items: list[list[str]] = []
         action_ids:   list[str]       = []
+
+        action_items.append([_NEW_NOTE_LABEL, "empty journal note (header + bullets)"])
+        action_ids.append(self._ID_NEW_NOTE)
 
         if yt_configured:
             project = _default_project()
@@ -2635,20 +1940,20 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
             ])
             action_ids.append(self._ID_IMPORT_FROM_YT_ALL)
 
-        action_items.append([_NEW_TICKET_LABEL, "create & link a new YouTrack issue"])
+        action_items.append([_NEW_TICKET_LABEL, "empty YouTrack issue slice (create on commit)"])
         action_ids.append(self._ID_CREATE_ISSUE)
 
-        self._panel_items    = pinned_items + regular_items + action_items
-        self._panel_item_ids = pinned_ids   + regular_ids   + action_ids
+        self._panel_items    = regular_items + action_items
+        self._panel_item_ids = regular_ids   + action_ids
 
-        default_idx = len(pinned_ids) if regular_ids else 0
+        default_idx = 0
 
         self.window.show_quick_panel(
             self._panel_items,
             self._on_quick_panel_done,
             flags=sublime.MONOSPACE_FONT,
             selected_index=default_idx,
-            placeholder="Select ticket, TODO, OPS, import or create new...",
+            placeholder="Select a ticket, import from YouTrack, or create new...",
         )
 
     def _on_quick_panel_done(self, index: int) -> None:
@@ -2657,7 +1962,9 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
             sublime.status_message("Notes: cancelled.")
             return
         selected = self._panel_item_ids[index]
-        if selected == self._ID_CREATE_ISSUE:
+        if selected == self._ID_NEW_NOTE:
+            self._start_new_note()
+        elif selected == self._ID_CREATE_ISSUE:
             self._start_create_issue()
         elif selected == self._ID_IMPORT_FROM_YT_ME:
             self._start_import_from_yt(mode="me")
@@ -2671,406 +1978,13 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
     # Create new issue (full flow, embedded)
     # ------------------------------------------------------------------
 
+    def _start_new_note(self) -> None:
+        self._active = False
+        _open_note_slice(self.window, "", [], replace=False)
+
     def _start_create_issue(self) -> None:
-        if not _youtrack_token() or not _youtrack_base():
-            self._active = False
-            _error_message(
-                "Notes - YouTrack not configured.\n\n"
-                "Run 'Notes - Settings' and set:\n"
-                '  "youtrack_base":  "https://youtrack.example.com/issue/"\n'
-                '  "youtrack_token": "<your permanent token>"'
-            )
-            return
-
-        base_err = _validate_youtrack_base(_youtrack_base())
-        if base_err:
-            self._active = False
-            _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
-            return
-
-        self._ci_with_stages        = False
-        self._ci_parent_exists      = False
-        self._ci_project            = _default_project()
-        self._ci_summary            = ""
-        self._ci_description        = ""
-        self._ci_assignee           = ""
-        self._ci_existing_parent_id = ""
-
-        self.window.show_input_panel(
-            "Create stage sub-tasks? [y/N]:",
-            "n",
-            self._ci_on_stages_yn,
-            None,
-            self._on_cancel,
-        )
-
-    def _ci_on_stages_yn(self, raw: str) -> None:
-        if raw.strip().lower() in ("y", "yes"):
-            self._ci_with_stages = True
-            self.window.show_input_panel(
-                "Does parent ticket already exist? [y/N]:",
-                "n",
-                self._ci_on_parent_exists_yn,
-                None,
-                self._on_cancel,
-            )
-        else:
-            self._ci_with_stages = False
-            self._ci_prompt_project()
-
-    def _ci_on_parent_exists_yn(self, raw: str) -> None:
-        if raw.strip().lower() in ("y", "yes"):
-            self._ci_parent_exists = True
-            self.window.show_input_panel(
-                "Parent ticket ID (e.g. PROJ-1234):",
-                "",
-                self._ci_on_existing_parent_id,
-                None,
-                self._on_cancel,
-            )
-        else:
-            self._ci_parent_exists = False
-            self._ci_prompt_project()
-
-    def _ci_on_existing_parent_id(self, raw: str) -> None:
-        tid_raw = raw.strip().upper()
-        if not tid_raw:
-            self._active = False
-            sublime.status_message("Notes: ticket ID cannot be empty - cancelled.")
-            return
-        self._ci_existing_parent_id = tid_raw
-        sublime.status_message(f"Notes: fetching parent info for {tid_raw}...")
-        sublime.set_timeout_async(lambda: self._ci_fetch_parent(tid_raw), 0)
-
-    def _ci_fetch_parent(self, tid_raw: str) -> None:
-        summary, assignee_login = _fetch_parent_info(tid_raw)
-
-        def _continue() -> None:
-            if summary is None:
-                sublime.status_message(
-                    f"Notes: WARNING - could not fetch info for {tid_raw}. "
-                    "Continuing with empty defaults."
-                )
-                self._ci_summary = tid_raw
-                assignee_default = ""
-            else:
-                self._ci_summary = summary
-                assignee_default = assignee_login or ""
-
-            self.window.show_input_panel(
-                f"Assignee login [{assignee_default or 'optional'}]:",
-                assignee_default,
-                self._ci_on_assignee_existing_parent,
-                None,
-                self._on_cancel,
-            )
-
-        sublime.set_timeout(_continue, 0)
-
-    def _ci_on_assignee_existing_parent(self, raw: str) -> None:
-        self._ci_assignee = raw.strip()
-        self._ci_resolve_stages_then_kick_off(
-            parent_id      = self._ci_existing_parent_id,
-            parent_summary = self._ci_summary,
-            assignee       = self._ci_assignee,
-            create_parent  = False,
-        )
-
-    def _ci_prompt_project(self) -> None:
-        self.window.show_input_panel(
-            "Project (shortName):",
-            self._ci_project,
-            self._ci_on_project,
-            None,
-            self._on_cancel,
-        )
-
-    def _ci_on_project(self, raw: str) -> None:
-        project = raw.strip().upper()
-        if not project:
-            self._active = False
-            sublime.status_message("Notes: project cannot be empty - cancelled.")
-            return
-        self._ci_project = project
-        self.window.show_input_panel(
-            f"Summary [{self._ci_project}]:",
-            "",
-            self._ci_on_summary,
-            None,
-            self._on_cancel,
-        )
-
-    def _ci_on_summary(self, raw: str) -> None:
-        summary = raw.strip()
-        if not summary:
-            self._active = False
-            sublime.status_message("Notes: summary cannot be empty - cancelled.")
-            return
-        self._ci_summary = summary
-        self.window.show_input_panel(
-            "Description (optional - Enter to skip):",
-            "",
-            self._ci_on_description,
-            None,
-            self._on_cancel,
-        )
-
-    def _ci_on_description(self, raw: str) -> None:
-        self._ci_description = raw.strip()
-        self.window.show_input_panel(
-            "Assign to me? [y/N]:",
-            "n",
-            self._ci_on_assign_to_me_yn,
-            None,
-            self._on_cancel,
-        )
-
-    def _ci_on_assign_to_me_yn(self, raw: str) -> None:
-        if raw.strip().lower() in ("y", "yes"):
-            sublime.set_timeout_async(self._ci_fetch_me_then_proceed, 0)
-        else:
-            self.window.show_input_panel(
-                "Assignee login (optional - Enter to skip):",
-                "",
-                self._ci_on_assignee_explicit,
-                None,
-                self._on_cancel,
-            )
-
-    def _ci_on_assignee_explicit(self, raw: str) -> None:
-        self._ci_assignee = raw.strip()
-        self._ci_proceed_after_assignee()
-
-    def _ci_fetch_me_then_proceed(self) -> None:
-        login, fullname = _fetch_current_user_login()
-        if login:
-            self._ci_assignee = login
-            display_name = f"{fullname} ({login})" if fullname else login
-            sublime.set_timeout(
-                lambda: sublime.status_message(f"Notes: assignee set to {display_name}"), 0
-            )
-        else:
-            self._ci_assignee = ""
-            sublime.set_timeout(
-                lambda: sublime.status_message(
-                    "Notes: could not fetch current user - leaving unassigned."
-                ), 0
-            )
-        sublime.set_timeout(self._ci_proceed_after_assignee, 0)
-
-    def _ci_proceed_after_assignee(self) -> None:
-        if self._ci_with_stages:
-            self._ci_resolve_stages_then_kick_off(
-                parent_id      = None,
-                parent_summary = self._ci_summary,
-                assignee       = self._ci_assignee,
-                create_parent  = True,
-            )
-        else:
-            self._ci_kick_off_single(
-                project     = self._ci_project,
-                summary     = self._ci_summary,
-                description = self._ci_description,
-                assignee    = self._ci_assignee,
-            )
-
-    def _ci_resolve_stages_then_kick_off(
-        self,
-        parent_id:      str | None,
-        parent_summary: str,
-        assignee:       str,
-        create_parent:  bool,
-    ) -> None:
-        stages = _issue_stages()
-        if stages:
-            self._ci_kick_off_with_stages(
-                parent_id      = parent_id,
-                parent_summary = parent_summary,
-                assignee       = assignee,
-                stages         = stages,
-                create_parent  = create_parent,
-            )
-        else:
-            self._ci_pending_stage_kwargs = {
-                "parent_id":      parent_id,
-                "parent_summary": parent_summary,
-                "assignee":       assignee,
-                "create_parent":  create_parent,
-            }
-            self.window.show_input_panel(
-                "Stage names (comma-separated, e.g. Design,Dev,QA,Deploy):",
-                "",
-                self._ci_on_stage_names_entered,
-                None,
-                self._on_cancel,
-            )
-
-    def _ci_on_stage_names_entered(self, raw: str) -> None:
-        stages = [s.strip() for s in raw.split(",") if s.strip()]
-        if not stages:
-            self._active = False
-            sublime.status_message("Notes: no stages entered - cancelled.")
-            return
-        s = _settings()
-        s.set("issue_stages", stages)
-        sublime.save_settings(_SETTINGS_FILE)
-        sublime.status_message(f"Notes: saved {len(stages)} stages to settings.")
-        kw = self._ci_pending_stage_kwargs
-        self._ci_kick_off_with_stages(
-            parent_id      = kw["parent_id"],
-            parent_summary = kw["parent_summary"],
-            assignee       = kw["assignee"],
-            stages         = stages,
-            create_parent  = kw["create_parent"],
-        )
-
-    def _ci_kick_off_single(
-        self, project: str, summary: str, description: str, assignee: str,
-    ) -> None:
         self._active = False
-        sublime.status_message(f"Notes: creating {project} issue '{summary}'...")
-        sublime.set_timeout_async(
-            lambda: self._ci_do_create_single(project, summary, description, assignee), 0
-        )
-
-    def _ci_do_create_single(
-        self, project: str, summary: str, description: str, assignee: str,
-    ) -> None:
-        try:
-            ticket_id = _yt_create_issue(project, summary, description, assignee)
-        except IssueCreateError as exc:
-            err_msg = str(exc)
-            sublime.set_timeout(
-                lambda: _error_message(f"Notes - failed to create issue:\n\n{err_msg}"), 0
-            )
-            return
-
-        base = _youtrack_base()
-        url  = f"{base}{ticket_id}"
-
-        def _notify() -> None:
-            try:
-                add_note(ticket_id, "CREATED")
-            except Exception as exc:
-                log.warning("Could not write CREATED entry: %s", exc)
-            sublime.set_clipboard(url)
-            _message_dialog(
-                f"Issue created: {ticket_id}\nURL: {url}\n\nURL copied to clipboard."
-            )
-            sublime.status_message(f"Notes: created {ticket_id}")
-
-        sublime.set_timeout(_notify, 0)
-
-    def _ci_kick_off_with_stages(
-        self,
-        parent_id:      str | None,
-        parent_summary: str,
-        assignee:       str,
-        stages:         list[str],
-        create_parent:  bool,
-    ) -> None:
-        self._active = False
-        project     = self._ci_project
-        description = self._ci_description
-
-        if create_parent:
-            sublime.status_message(
-                f"Notes: creating {project} issue '{parent_summary}' + "
-                f"{len(stages)} stage(s)..."
-            )
-        else:
-            sublime.status_message(
-                f"Notes: creating {len(stages)} stage sub-task(s) under {parent_id}..."
-            )
-
-        sublime.set_timeout_async(
-            lambda: self._ci_do_create_with_stages(
-                project        = project,
-                parent_id      = parent_id,
-                parent_summary = parent_summary,
-                description    = description,
-                assignee       = assignee,
-                stages         = stages,
-                create_parent  = create_parent,
-            ), 0,
-        )
-
-    def _ci_do_create_with_stages(
-        self,
-        project:        str,
-        parent_id:      str | None,
-        parent_summary: str,
-        description:    str,
-        assignee:       str,
-        stages:         list[str],
-        create_parent:  bool,
-    ) -> None:
-        base = _youtrack_base()
-
-        if create_parent:
-            try:
-                parent_id = _yt_create_issue(project, parent_summary, description, assignee)
-            except IssueCreateError as exc:
-                err_msg = str(exc)
-                sublime.set_timeout(
-                    lambda: _error_message(
-                        f"Notes - failed to create parent issue:\n\n{err_msg}"
-                    ), 0,
-                )
-                return
-
-        assert parent_id is not None
-
-        child_results: list[tuple[str, str, bool]] = []
-        for stage in stages:
-            child_summary = f"{parent_summary} - {stage}"
-            try:
-                child_id = _yt_create_issue(project, child_summary, "", assignee)
-                linked   = _yt_link_as_subtask(parent_id, child_id)
-                child_results.append((stage, child_id, linked))
-            except IssueCreateError as exc:
-                log.warning("YouTrack: failed to create stage '%s': %s", stage, exc)
-                child_results.append((stage, f"FAILED: {exc}", False))
-
-        _parent_id_snap  = parent_id
-        _parent_url_snap = f"{base}{parent_id}"
-
-        def _notify() -> None:
-            ok_children = [cid for _, cid, _ in child_results if not cid.startswith("FAILED:")]
-            if ok_children:
-                child_refs  = ", ".join(f"#{cid}" for cid in ok_children)
-                stage_entry = f"- [CREATED] for each stage: {child_refs}"
-                try:
-                    add_note_raw(_parent_id_snap, stage_entry)
-                except Exception as exc:
-                    log.warning("Could not write stage CREATED entry for %s: %s", _parent_id_snap, exc)
-            else:
-                try:
-                    add_note(_parent_id_snap, "CREATED")
-                except Exception as exc:
-                    log.warning("Could not write CREATED for parent %s: %s", _parent_id_snap, exc)
-
-            sublime.set_clipboard(_parent_url_snap)
-            msg_lines = [
-                f"Parent issue:   {_parent_id_snap}",
-                f"URL:            {_parent_url_snap}",
-                "Parent URL copied to clipboard.", "",
-                "Stage sub-tasks:",
-            ]
-            for stage, cid_or_err, linked in child_results:
-                if cid_or_err.startswith("FAILED:"):
-                    msg_lines.append(f"  [{stage}]  FAILED - {cid_or_err[7:]}")
-                else:
-                    link_note = " (linked as subtask)" if linked else " (standalone)"
-                    msg_lines.append(f"  [{stage}]  {cid_or_err}{link_note}")
-
-            _message_dialog("\n".join(msg_lines))
-            n_ok = len(ok_children)
-            sublime.status_message(
-                f"Notes: {_parent_id_snap} + {n_ok}/{len(stages)} stage(s) created"
-            )
-
-        sublime.set_timeout(_notify, 0)
+        _open_create_issue_slice(self.window)
 
     # ------------------------------------------------------------------
     # Import from YouTrack  (mode="me" | mode="all")
@@ -3105,10 +2019,17 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
         )
 
     def _fetch_yt_for_import(self, project: str, mode: str) -> None:
-        if mode == "me":
-            issues, err_msg = _fetch_my_assigned_issues_for_import(project)
-        else:
-            issues, err_msg = _fetch_project_issues_for_import(project)
+        err_msg: str | None = None
+        issues: list[dict] = []
+        try:
+            if mode == "me":
+                issues, err_msg = _fetch_my_assigned_issues_for_import(project)
+            else:
+                issues, err_msg = _fetch_project_issues_for_import(project)
+        except Exception as exc:
+            log.exception("YouTrack import fetch failed")
+            err_msg = f"{type(exc).__name__}: {exc}"
+            issues = []
         sublime.set_timeout(
             lambda: self._show_yt_import_panel(issues, project, mode, err_msg), 0
         )
@@ -3160,15 +2081,19 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
         self._yt_import_issues = issues
         panel_items: list[list[str]] = []
         for issue in issues:
-            iid     = issue.get("idReadable") or ""
-            summary = issue.get("summary") or "(no summary)"
-            parsed  = _parse_youtrack_issue(issue)
-            state   = parsed.get("state") or ""
-            assign  = parsed.get("assignee") or ""
-            sub     = "  ".join(x for x in [state, assign] if x)
-            panel_items.append(
-                [f"{iid}  {summary}", sub] if sub else [f"{iid}  {summary}"]
-            )
+            try:
+                iid     = issue.get("idReadable") or ""
+                summary = issue.get("summary") or "(no summary)"
+                parsed  = _parse_youtrack_issue(issue)
+                state   = parsed.get("state") or ""
+                assign  = parsed.get("assignee") or ""
+                sub     = "  ".join(x for x in [state, assign] if x)
+                panel_items.append(
+                    [f"{iid}  {summary}", sub] if sub else [f"{iid}  {summary}"]
+                )
+            except Exception:
+                iid = (issue.get("idReadable") or "?") if isinstance(issue, dict) else "?"
+                panel_items.append([str(iid)])
 
         mode_label = "assigned to me" if mode == "me" else "all unresolved"
         self.window.show_quick_panel(
@@ -3185,12 +2110,26 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
             sublime.status_message("Notes: import cancelled.")
             return
         issue = self._yt_import_issues[index]
-        self._ticket_id = (issue.get("idReadable") or "").upper()
-        if not self._ticket_id:
+        ticket_id = (issue.get("idReadable") or "").strip()
+        if not ticket_id:
             self._active = False
             sublime.status_message("Notes: could not determine ticket ID.")
             return
-        self._prompt_description()
+        parsed = {}
+        try:
+            parsed = _parse_youtrack_issue(issue)
+        except Exception:
+            pass
+        stub = {
+            "summary": issue.get("summary") or parsed.get("summary") or "",
+            "assignee": parsed.get("assignee") or "",
+            "reporter": parsed.get("reporter") or "",
+            "state": parsed.get("state") or "",
+            "priority": parsed.get("priority") or "",
+            "project": parsed.get("project") or _default_project(),
+        }
+        self._active = False
+        _open_imported_issue_slice(self.window, ticket_id, stub)
 
     # ------------------------------------------------------------------
     # Description + write (multi-line via scratch buffer)
@@ -3204,7 +2143,9 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
     def _on_description(self, raw: str) -> None:
         """Legacy single-line path (kept for any callers)."""
         self._active = False
-        _finish_add_description(self.window, self._ticket_id, raw)
+        _finish_add_description(
+            self.window, self._ticket_id, raw, allow_yt_comment=True
+        )
 
     def _on_cancel(self) -> None:
         self._active = False
@@ -3212,7 +2153,7 @@ class NotesAddCommand(sublime_plugin.WindowCommand):
 
 
 class NotesSearchCommand(sublime_plugin.WindowCommand):
-    """Command: notes_search  |  Palette: Notes - Search"""
+    """Command: notes_search  |  Palette: .notes - Search"""
 
     def run(self) -> None:
         try:
@@ -3333,7 +2274,7 @@ class NotesSearchCommand(sublime_plugin.WindowCommand):
 class NotesSearchResolvedCommand(sublime_plugin.WindowCommand):
     """
     Command: notes_search_resolved
-    Palette: Notes: Search Recently Resolved
+    Palette: .notes - Search Recently Resolved
     Menu: Notes → Search → Recently Resolved / Closed (mine)
 
     Lists finished (#Resolved / Done / Closed / …) issues assigned to me in
@@ -3441,7 +2382,7 @@ class NotesSearchResolvedCommand(sublime_plugin.WindowCommand):
 
 
 class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
-    """Command: notes_open_issue  |  Palette: Notes - Open Issue"""
+    """Command: notes_open_issue  |  Palette: .notes - Open Issue"""
 
     _OPEN_BY_ID        = "__open_by_id__"
     _UNASSIGNED_ISSUES = "__unassigned_issues__"
@@ -3483,13 +2424,13 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
 
         if yt_configured:
             panel_items.append([
-                f"[ All issues ({project}) ]",
+                f"All issues ({project})",
                 "YouTrack: pick assignee, then optional text filter",
             ])
             self._tickets.append(self._ALL_ISSUES)
 
             panel_items.append([
-                f"[ Unassigned issues ({project}) ]",
+                f"Unassigned issues ({project})",
                 "YouTrack: unassigned open issues",
             ])
             self._tickets.append(self._UNASSIGNED_ISSUES)
@@ -3610,7 +2551,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
         self._assignee_filter_keys: list[str] = []
 
         panel_items.append([
-            "[ All unresolved ]",
+            "All unresolved",
             f"Any assignee in {project} ({len(self._assignee_filter_issues)})",
         ])
         self._assignee_filter_keys.append(self._ALL_ASSIGNEE_ANY)
@@ -3633,7 +2574,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
             self._assignee_filter_keys.append(self._ALL_ASSIGNEE_ME)
 
         panel_items.append([
-            "[ Type login… ]",
+            "Type login…",
             "Enter a login not listed (queries YouTrack)",
         ])
         self._assignee_filter_keys.append(self._ALL_ASSIGNEE_TYPE)
@@ -4010,7 +2951,7 @@ class NotesOpenIssueCommand(sublime_plugin.WindowCommand):
 
 
 class NotesWeeklySearchCommand(sublime_plugin.WindowCommand):
-    """Command: notes_weekly_search  |  Palette: Notes - Weekly Search"""
+    """Command: notes_weekly_search  |  Palette: .notes - Weekly Search"""
 
     def run(self) -> None:
         try:
@@ -4072,7 +3013,7 @@ class NotesWeeklySearchCommand(sublime_plugin.WindowCommand):
 
 
 class NotesWeeklySummaryCommand(sublime_plugin.WindowCommand):
-    """Command: notes_weekly_summary  |  Palette: Notes - Weekly Summary"""
+    """Command: notes_weekly_summary  |  Palette: .notes - Weekly Summary"""
 
     def run(self) -> None:
         try:
@@ -4109,448 +3050,36 @@ class NotesWeeklySummaryCommand(sublime_plugin.WindowCommand):
 # ---------------------------------------------------------------------------
 
 class NotesCreateIssueCommand(sublime_plugin.WindowCommand):
-    """
-    Command: notes_create_issue
-    NOTE: This command is intentionally omitted from Default.sublime-commands
-    (the palette). It is still callable programmatically.
-    Use 'Notes - Add' -> '[ + Create new issue ]' instead.
-    """
-
-    _active: bool = False
-
-    _with_stages:         bool
-    _parent_exists:       bool
-    _project:             str
-    _summary:             str
-    _description:         str
-    _assignee:            str
-    _existing_parent_id:  str
+    """Command: notes_create_issue | same empty issue slice as Add → Issue."""
 
     def run(self) -> None:
-        if not _youtrack_token() or not _youtrack_base():
-            _error_message(
-                "Notes - YouTrack not configured.\n\n"
-                "Run 'Notes - Settings' and set:\n"
-                '  "youtrack_base":  "https://youtrack.example.com/issue/"\n'
-                '  "youtrack_token": "<your permanent token>"'
-            )
-            return
-
-        base_err = _validate_youtrack_base(_youtrack_base())
-        if base_err:
-            _error_message(f"Notes - invalid youtrack_base:\n\n{base_err}")
-            return
-
-        if self._active:
-            sublime.status_message("Notes: already creating an issue.")
-            return
-
-        self._active             = True
-        self._with_stages        = False
-        self._parent_exists      = False
-        self._project            = _default_project()
-        self._summary            = ""
-        self._description        = ""
-        self._assignee           = ""
-        self._existing_parent_id = ""
-
-        self.window.show_input_panel(
-            "Create stage sub-tasks? [y/N]:",
-            "n",
-            self._on_stages_yn,
-            None,
-            self._on_cancel,
-        )
-
-    def _on_stages_yn(self, raw: str) -> None:
-        answer = raw.strip().lower()
-        if answer in ("y", "yes"):
-            self._with_stages = True
-            self.window.show_input_panel(
-                "Does parent ticket already exist? [y/N]:",
-                "n",
-                self._on_parent_exists_yn,
-                None,
-                self._on_cancel,
-            )
-        else:
-            self._with_stages = False
-            self._prompt_project()
-
-    def _on_parent_exists_yn(self, raw: str) -> None:
-        answer = raw.strip().lower()
-        if answer in ("y", "yes"):
-            self._parent_exists = True
-            self.window.show_input_panel(
-                "Parent ticket ID (e.g. PROJ-1234):",
-                "",
-                self._on_existing_parent_id,
-                None,
-                self._on_cancel,
-            )
-        else:
-            self._parent_exists = False
-            self._prompt_project()
-
-    def _on_existing_parent_id(self, raw: str) -> None:
-        tid_raw = raw.strip().upper()
-        if not tid_raw:
-            self._active = False
-            sublime.status_message("Notes: ticket ID cannot be empty - cancelled.")
-            return
-
-        self._existing_parent_id = tid_raw
-        sublime.status_message(f"Notes: fetching parent info for {tid_raw}...")
-
-        def _fetch() -> None:
-            summary, assignee_login = _fetch_parent_info(tid_raw)
-
-            def _continue() -> None:
-                if summary is None:
-                    sublime.status_message(
-                        f"Notes: WARNING - could not fetch info for {tid_raw}. "
-                        "Continuing with empty defaults."
-                    )
-                    self._summary    = tid_raw
-                    assignee_default = ""
-                else:
-                    self._summary    = summary
-                    assignee_default = assignee_login or ""
-
-                self.window.show_input_panel(
-                    f"Assignee login [{assignee_default or 'optional'}]:",
-                    assignee_default,
-                    self._on_assignee_existing_parent,
-                    None,
-                    self._on_cancel,
-                )
-
-            sublime.set_timeout(_continue, 0)
-
-        sublime.set_timeout_async(_fetch, 0)
-
-    def _on_assignee_existing_parent(self, raw: str) -> None:
-        self._assignee = raw.strip()
-        self._resolve_stages_then_kick_off(
-            parent_id      = self._existing_parent_id,
-            parent_summary = self._summary,
-            assignee       = self._assignee,
-            create_parent  = False,
-        )
-
-    def _prompt_project(self) -> None:
-        self.window.show_input_panel(
-            "Project (shortName):",
-            self._project,
-            self._on_project,
-            None,
-            self._on_cancel,
-        )
-
-    def _on_project(self, raw: str) -> None:
-        project = raw.strip().upper()
-        if not project:
-            self._active = False
-            sublime.status_message("Notes: project cannot be empty - cancelled.")
-            return
-        self._project = project
-        self.window.show_input_panel(
-            f"Summary [{self._project}]:",
-            "",
-            self._on_summary,
-            None,
-            self._on_cancel,
-        )
-
-    def _on_summary(self, raw: str) -> None:
-        summary = raw.strip()
-        if not summary:
-            self._active = False
-            sublime.status_message("Notes: summary cannot be empty - cancelled.")
-            return
-        self._summary = summary
-        self.window.show_input_panel(
-            "Description (optional - Enter to skip):",
-            "",
-            self._on_description,
-            None,
-            self._on_cancel,
-        )
-
-    def _on_description(self, raw: str) -> None:
-        self._description = raw.strip()
-        self.window.show_input_panel(
-            "Assign to me? [y/N]:",
-            "n",
-            self._on_assign_to_me_yn,
-            None,
-            self._on_cancel,
-        )
-
-    def _on_assign_to_me_yn(self, raw: str) -> None:
-        if raw.strip().lower() in ("y", "yes"):
-            sublime.set_timeout_async(self._fetch_me_then_proceed, 0)
-        else:
-            self.window.show_input_panel(
-                "Assignee login (optional - Enter to skip):",
-                "",
-                self._on_assignee_explicit,
-                None,
-                self._on_cancel,
-            )
-
-    def _on_assignee_explicit(self, raw: str) -> None:
-        self._assignee = raw.strip()
-        self._proceed_after_assignee()
-
-    def _fetch_me_then_proceed(self) -> None:
-        login, fullname = _fetch_current_user_login()
-        if login:
-            self._assignee = login
-            display_name   = f"{fullname} ({login})" if fullname else login
-            sublime.set_timeout(
-                lambda: sublime.status_message(f"Notes: assignee set to {display_name}"), 0
-            )
-        else:
-            self._assignee = ""
-            sublime.set_timeout(
-                lambda: sublime.status_message(
-                    "Notes: could not fetch current user - leaving unassigned."
-                ), 0
-            )
-        sublime.set_timeout(self._proceed_after_assignee, 0)
-
-    def _proceed_after_assignee(self) -> None:
-        if self._with_stages:
-            self._resolve_stages_then_kick_off(
-                parent_id      = None,
-                parent_summary = self._summary,
-                assignee       = self._assignee,
-                create_parent  = True,
-            )
-        else:
-            self._kick_off_single(
-                project     = self._project,
-                summary     = self._summary,
-                description = self._description,
-                assignee    = self._assignee,
-            )
-
-    def _resolve_stages_then_kick_off(
-        self,
-        parent_id:      str | None,
-        parent_summary: str,
-        assignee:       str,
-        create_parent:  bool,
-    ) -> None:
-        stages = _issue_stages()
-        if stages:
-            self._kick_off_with_stages(
-                parent_id      = parent_id,
-                parent_summary = parent_summary,
-                assignee       = assignee,
-                stages         = stages,
-                create_parent  = create_parent,
-            )
-        else:
-            self._pending_stage_kwargs = {
-                "parent_id":      parent_id,
-                "parent_summary": parent_summary,
-                "assignee":       assignee,
-                "create_parent":  create_parent,
-            }
-            self.window.show_input_panel(
-                "Stage names (comma-separated, e.g. Design,Dev,QA,Deploy):",
-                "",
-                self._on_stage_names_entered,
-                None,
-                self._on_cancel,
-            )
-
-    def _on_stage_names_entered(self, raw: str) -> None:
-        stages = [s.strip() for s in raw.split(",") if s.strip()]
-        if not stages:
-            self._active = False
-            sublime.status_message("Notes: no stages entered - cancelled.")
-            return
-        s = _settings()
-        s.set("issue_stages", stages)
-        sublime.save_settings(_SETTINGS_FILE)
-        sublime.status_message(f"Notes: saved {len(stages)} stages to settings.")
-        kw = self._pending_stage_kwargs
-        self._kick_off_with_stages(
-            parent_id      = kw["parent_id"],
-            parent_summary = kw["parent_summary"],
-            assignee       = kw["assignee"],
-            stages         = stages,
-            create_parent  = kw["create_parent"],
-        )
-
-    def _kick_off_single(
-        self, project: str, summary: str, description: str, assignee: str,
-    ) -> None:
-        self._active = False
-        sublime.status_message(f"Notes: creating {project} issue '{summary}'...")
-        sublime.set_timeout_async(
-            lambda: self._do_create_single(project, summary, description, assignee), 0
-        )
-
-    def _do_create_single(
-        self, project: str, summary: str, description: str, assignee: str,
-    ) -> None:
-        try:
-            ticket_id = _yt_create_issue(project, summary, description, assignee)
-        except IssueCreateError as exc:
-            err_msg = str(exc)
-            sublime.set_timeout(
-                lambda: _error_message(
-                    f"Notes - failed to create issue:\n\n{err_msg}"
-                ), 0,
-            )
-            return
-
-        base = _youtrack_base()
-        url  = f"{base}{ticket_id}"
-
-        def _notify() -> None:
-            try:
-                add_note(ticket_id, "CREATED")
-            except Exception as exc:
-                log.warning("Could not write CREATED entry: %s", exc)
-            sublime.set_clipboard(url)
-            _message_dialog(
-                f"Issue created: {ticket_id}\nURL: {url}\n\nURL copied to clipboard."
-            )
-            sublime.status_message(f"Notes: created {ticket_id}")
-
-        sublime.set_timeout(_notify, 0)
-
-    def _kick_off_with_stages(
-        self,
-        parent_id:      str | None,
-        parent_summary: str,
-        assignee:       str,
-        stages:         list[str],
-        create_parent:  bool,
-    ) -> None:
-        self._active = False
-        project      = self._project
-        description  = self._description
-
-        if create_parent:
-            sublime.status_message(
-                f"Notes: creating {project} issue '{parent_summary}' + "
-                f"{len(stages)} stage(s)..."
-            )
-        else:
-            sublime.status_message(
-                f"Notes: creating {len(stages)} stage sub-task(s) under {parent_id}..."
-            )
-
-        sublime.set_timeout_async(
-            lambda: self._do_create_with_stages(
-                project        = project,
-                parent_id      = parent_id,
-                parent_summary = parent_summary,
-                description    = description,
-                assignee       = assignee,
-                stages         = stages,
-                create_parent  = create_parent,
-            ), 0,
-        )
-
-    def _do_create_with_stages(
-        self,
-        project:        str,
-        parent_id:      str | None,
-        parent_summary: str,
-        description:    str,
-        assignee:       str,
-        stages:         list[str],
-        create_parent:  bool,
-    ) -> None:
-        base = _youtrack_base()
-
-        if create_parent:
-            try:
-                parent_id = _yt_create_issue(project, parent_summary, description, assignee)
-            except IssueCreateError as exc:
-                err_msg = str(exc)
-                sublime.set_timeout(
-                    lambda: _error_message(
-                        f"Notes - failed to create parent issue:\n\n{err_msg}"
-                    ), 0,
-                )
-                return
-
-        assert parent_id is not None
-
-        child_results: list[tuple[str, str, bool]] = []
-        for stage in stages:
-            child_summary = f"{parent_summary} - {stage}"
-            try:
-                child_id = _yt_create_issue(project, child_summary, "", assignee)
-                linked   = _yt_link_as_subtask(parent_id, child_id)
-                child_results.append((stage, child_id, linked))
-                log.info("YouTrack: created stage '%s' as %s (linked=%s)", stage, child_id, linked)
-            except IssueCreateError as exc:
-                log.warning("YouTrack: failed to create stage '%s': %s", stage, exc)
-                child_results.append((stage, f"FAILED: {exc}", False))
-
-        _parent_id_snap  = parent_id
-        _parent_url_snap = f"{base}{parent_id}"
-
-        def _notify() -> None:
-            ok_children = [
-                child_id
-                for _, child_id, _ in child_results
-                if not child_id.startswith("FAILED:")
-            ]
-
-            if ok_children:
-                child_refs  = ", ".join(f"#{cid}" for cid in ok_children)
-                stage_entry = f"- [CREATED] for each stage: {child_refs}"
-                try:
-                    add_note_raw(_parent_id_snap, stage_entry)
-                except Exception as exc:
-                    log.warning(
-                        "Could not write stage CREATED entry for %s: %s", _parent_id_snap, exc
-                    )
-            else:
-                try:
-                    add_note(_parent_id_snap, "CREATED")
-                except Exception as exc:
-                    log.warning("Could not write CREATED for parent %s: %s", _parent_id_snap, exc)
-
-            sublime.set_clipboard(_parent_url_snap)
-            msg_lines = [
-                f"Parent issue:   {_parent_id_snap}",
-                f"URL:            {_parent_url_snap}",
-                "Parent URL copied to clipboard.", "",
-                "Stage sub-tasks:",
-            ]
-            for stage, child_id_or_err, linked in child_results:
-                if child_id_or_err.startswith("FAILED:"):
-                    msg_lines.append(f"  [{stage}]  FAILED - {child_id_or_err[7:]}")
-                else:
-                    link_note = " (linked as subtask)" if linked else " (standalone)"
-                    msg_lines.append(f"  [{stage}]  {child_id_or_err}{link_note}")
-
-            _message_dialog("\n".join(msg_lines))
-            n_ok = len(ok_children)
-            sublime.status_message(
-                f"Notes: {_parent_id_snap} + {n_ok}/{len(stages)} stage(s) created"
-            )
-
-        sublime.set_timeout(_notify, 0)
-
-    def _on_cancel(self) -> None:
-        self._active = False
-        sublime.status_message("Notes: cancelled.")
+        _open_create_issue_slice(self.window)
 
 
-class NotesEditCommand(sublime_plugin.WindowCommand):
-    """Command: notes_edit  |  Palette: Notes - Edit"""
+def _is_journal_file_view(view: sublime.View) -> bool:
+    fname = view.file_name() or ""
+    if not fname:
+        return False
+    try:
+        return os.path.realpath(fname) == _notes_file()
+    except OSError:
+        return False
+
+
+def _protect_journal_view(view: sublime.View) -> None:
+    if view is None or not view.is_valid():
+        return
+    try:
+        view.settings().set("stnotes_journal_file", True)
+        if not view.is_read_only():
+            view.set_read_only(True)
+        _assign_stnotes_syntax(view)
+    except Exception:
+        pass
+
+
+class NotesViewCommand(sublime_plugin.WindowCommand):
+    """Command: notes_view | Palette: .notes - View (read-only journal)."""
 
     def run(self) -> None:
         try:
@@ -4560,24 +3089,49 @@ class NotesEditCommand(sublime_plugin.WindowCommand):
                 )
                 return
             if not os.path.exists(_notes_file()):
-                _write_notes([])
+                if not seed_notes_demo_if_needed():
+                    _write_notes([])
         except RuntimeError as exc:
             _error_message(f"Notes - cannot create file:\n\n{exc}")
             return
 
         view = self.window.open_file(_notes_file())
+        view.settings().set("stnotes_journal_file", True)
 
-        def _set_syntax() -> None:
+        def _after_load() -> None:
             if view.is_loading():
-                sublime.set_timeout(_set_syntax, 50)
+                sublime.set_timeout(_after_load, 50)
                 return
-            _assign_stnotes_syntax(view)
+            _protect_journal_view(view)
 
-        _set_syntax()
+        _after_load()
+
+
+class NotesEditCommand(NotesViewCommand):
+    """Back-compat: notes_edit → same as notes_view."""
+
+
+class NotesJournalDetectListener(sublime_plugin.EventListener):
+    """Mark the on-disk journal read-only and enable Alt+Up/Down / Enter."""
+
+    def on_load_async(self, view: sublime.View) -> None:
+        self._mark_and_protect(view)
+
+    def on_activated_async(self, view: sublime.View) -> None:
+        self._mark_and_protect(view)
+
+    def _mark_and_protect(self, view: sublime.View) -> None:
+        try:
+            if view.settings().get("stnotes_slice"):
+                return
+            if _is_journal_file_view(view) or view.settings().get("stnotes_journal_file"):
+                sublime.set_timeout(lambda v=view: _protect_journal_view(v), 0)
+        except Exception:
+            pass
 
 
 class NotesSettingsCommand(sublime_plugin.WindowCommand):
-    """Command: notes_settings  |  Palette: Notes - Settings"""
+    """Command: notes_settings  |  Palette: .notes - Settings"""
 
     def run(self) -> None:
         self.window.run_command(
@@ -4585,32 +3139,18 @@ class NotesSettingsCommand(sublime_plugin.WindowCommand):
             {
                 "base_file": "${packages}/notes/ST4Notes.sublime-settings",
                 "default": (
-                    "// ST4Notes Settings\n"
-                    "// -----------------\n"
-                    "// notes_file      : path to the local notes file\n"
-                    "// youtrack_base   : https YouTrack issue base URL\n"
-                    "// youtrack_token  : permanent token (User settings only)\n"
-                    "// gitlab_base     : https GitLab root (MR hover)\n"
-                    "// gitlab_token    : PAT read_api (User settings only)\n"
-                    "// default_project — YouTrack shortName\n"
-                    "// issue_stages — Create Issue sub-task labels (e.g. Design,Dev,QA)\n"
-                    "//   NOT Kubetools cluster seal stages — use [] to prompt once\n"
-                    "// post_comments\n"
-                    "// note_max_lines / note_max_line_len : multi-line Add limits\n"
-                    "// api_timeout_sec / api_max_retries\n"
+                    "// notes — User overlay (tokens stay here, not in the package repo)\n"
+                    "// Settings file: ST4Notes.sublime-settings (legacy basename)\n"
+                    "// Optional: override notes_file if Documents is OneDrive or localized\n"
+                    "//   (e.g. ~/OneDrive/Documents/ST4Notes or ~/Dokumente/ST4Notes).\n"
                     "{\n"
-                    '    "notes_file":       "~/Documents/ST4Notes",\n'
-                    '    "youtrack_base":    "https://youtrack.example.com/issue/",\n'
-                    '    "youtrack_token":   "",\n'
-                    '    "gitlab_base":      "https://gitlab.example.com/",\n'
-                    '    "gitlab_token":     "",\n'
-                    '    "default_project":  "",\n'
-                    '    "issue_stages":     [],\n'
-                    '    "post_comments":    false,\n'
-                    '    "note_max_lines":   50,\n'
-                    '    "note_max_line_len": 500,\n'
-                    '    "api_timeout_sec":  10,\n'
-                    '    "api_max_retries":  2\n'
+                    '    "youtrack_base": "https://youtrack.example.com/issue/",\n'
+                    '    "youtrack_token": "",\n'
+                    '    "gitlab_base": "https://gitlab.example.com/",\n'
+                    '    "gitlab_token": "",\n'
+                    '    "default_project": "",\n'
+                    '    "issue_stages": [],\n'
+                    '    "post_comments": false\n'
                     "}\n"
                 ),
             },
@@ -4627,311 +3167,25 @@ _ISSUE_ID_RE = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# GitLab MR hover helpers
-# ---------------------------------------------------------------------------
 
-_GITLAB_MR_URL_RE = re.compile(
-    r"^https://([^/]+)/(.+)/-/merge_requests/(\d+)(?:[/?#]|$)",
-    re.IGNORECASE,
-)
-
-
-def _parse_gitlab_mr_url(url: str) -> tuple[str, str, str] | None:
-    """
-    Return (host, project_path, mr_iid) for a GitLab MR URL, or None.
-    project_path is URL-decoded path without leading slash
-    (e.g. group/subgroup/project).
-    """
-    m = _GITLAB_MR_URL_RE.match(url.strip())
-    if not m:
-        return None
-    host = m.group(1).lower()
-    project_path = m.group(2).strip("/")
-    iid = m.group(3)
-    if not project_path or not iid:
-        return None
-    return host, project_path, iid
+def _invalidate_kb_cache() -> None:
+    try:
+        import kb.kb_plugin as _kbp
+        _kbp._invalidate_kb_cache()
+    except Exception:
+        pass
 
 
-def _gitlab_request(path: str, params: str = "") -> dict | list | None:
-    api_root = _gitlab_api_root()
-    token = _gitlab_token()
-    if not api_root or not token:
-        return None
-
-    base_err = _validate_gitlab_base(_gitlab_base())
-    if base_err:
-        log.error("GitLab base URL rejected: %s", base_err)
-        return None
-
-    url = f"{api_root}{path}"
-    if params:
-        url += ("&" if "?" in url else "?") + params
-
-    timeout = _api_timeout()
-    retries = _api_max_retries()
-    ctx = _ssl_context()
-
-    for attempt in range(retries + 1):
-        _api_rate_wait()
-        req = Request(
-            url,
-            method="GET",
-            headers={
-                "PRIVATE-TOKEN": token,
-                "Accept": "application/json",
-                "Cache-Control": "no-cache",
-            },
-        )
-        try:
-            with _yt_urlopen(req, timeout=timeout, ctx=ctx) as resp:
-                raw = resp.read(_API_MAX_RESPONSE_BYTES_LIST).decode("utf-8")
-                return json.loads(raw) if raw.strip() else {}
-        except HTTPError as exc:
-            if exc.code == 404:
-                return _NOT_FOUND
-            if exc.code in (429, 502, 503) and attempt < retries:
-                time.sleep(1 + attempt)
-                continue
-            log.warning("GitLab API HTTP %s for GET %s", exc.code, path)
-            return None
-        except Exception as exc:
-            if attempt < retries:
-                time.sleep(1 + attempt)
-                continue
-            _safe_log("warning", "GitLab API error GET %s: %s", path, exc)
-            return None
-    return None
-
-
-def _pipeline_color(status: str) -> str:
-    s = (status or "").lower()
-    if s in ("success", "passed"):
-        return "#98c379"
-    if s in ("failed", "canceled", "cancelled"):
-        return "#e06c75"
-    if s in ("running", "pending", "created", "waiting_for_resource", "preparing"):
-        return "#e5c07b"
-    if s in ("skipped", "manual"):
-        return "#5c6370"
-    return "#abb2bf"
-
-
-def _mr_state_color(state: str) -> str:
-    s = (state or "").lower()
-    if s == "merged":
-        return "#c678dd"
-    if s == "opened" or s == "open":
-        return "#98c379"
-    if s == "closed":
-        return "#e06c75"
-    return "#abb2bf"
-
-
-def _fetch_gitlab_mr_info(project_path: str, iid: str) -> dict | None:
-    proj = quote(project_path, safe="")
-    mr = _gitlab_request(
-        f"/projects/{proj}/merge_requests/{iid}",
-        params=(
-            "include_diverged_commits_count=false"
-            "&include_rebase_in_progress=false"
-        ),
-    )
-    if mr is _NOT_FOUND:
-        return {"__not_found__": True}
-    if not isinstance(mr, dict) or not mr:
-        return None
-
-    state = str(mr.get("state") or "")
-    title = str(mr.get("title") or "")
-    draft = bool(mr.get("draft") or mr.get("work_in_progress"))
-
-    pipe = mr.get("head_pipeline") or {}
-    if not isinstance(pipe, dict):
-        pipe = {}
-    pipe_status = str(pipe.get("status") or "")
-    pipe_web = str(pipe.get("web_url") or "")
-
-    # Detailed merge / approval status when present
-    detailed = str(
-        mr.get("detailed_merge_status")
-        or mr.get("merge_status")
-        or ""
-    )
-
-    changes = _gitlab_request(
-        f"/projects/{proj}/merge_requests/{iid}/changes",
-        params="access_raw_diffs=false",
-    )
-    # Each entry: {label, path} — path is used for GitLab diffs deep-link / local open
-    files: list[dict] = []
-    if isinstance(changes, dict):
-        ch_list = changes.get("changes") or []
-        if isinstance(ch_list, list):
-            for ch in ch_list[:40]:
-                if not isinstance(ch, dict):
-                    continue
-                new_p = str(ch.get("new_path") or ch.get("old_path") or "")
-                old_p = str(ch.get("old_path") or "")
-                # Prefer new_path for anchor hash (matches GitLab UI for non-deleted)
-                link_path = new_p or old_p
-                if ch.get("new_file"):
-                    label = f"+ {new_p}"
-                elif ch.get("deleted_file"):
-                    link_path = old_p or new_p
-                    label = f"- {link_path}"
-                elif ch.get("renamed_file") and old_p and new_p and old_p != new_p:
-                    label = f"~ {old_p} → {new_p}"
-                    link_path = new_p
-                else:
-                    label = f"  {new_p}"
-                if link_path:
-                    files.append({"label": label, "path": link_path})
-            total = len(ch_list)
-            if total > len(files):
-                files.append(
-                    {
-                        "label": f"… +{total - len(files)} more",
-                        "path": "",
-                    }
-                )
-
-    return {
-        "title": title,
-        "state": state,
-        "draft": draft,
-        "detailed_merge_status": detailed,
-        "pipeline_status": pipe_status,
-        "pipeline_url": pipe_web,
-        "files": files,
-        "author": ((mr.get("author") or {}) if isinstance(mr.get("author"), dict) else {}).get("username", ""),
-        "source_branch": str(mr.get("source_branch") or ""),
-        "target_branch": str(mr.get("target_branch") or ""),
-    }
-
-
-def _build_mr_hover_html(url: str, info: dict | None, not_found: bool = False) -> str:
-    link_html = (
-        f"<a href='open:{_h(url)}' "
-        f"style='color:#56b6c2;text-decoration:underline'>{_h(url)}</a>"
-    )
-    sep = "<div style='margin:6px 0;border-top:1px solid #3e4451'></div>"
-
-    if not_found:
-        body = (
-            "<span style='color:#e06c75'>MR not found</span> "
-            "<span style='color:#5c6370'>(404)</span>"
-        )
-        return (
-            "<body id='stnotes-hover' "
-            "style='margin:8px 12px;font-family:monospace;font-size:0.9em'>"
-            + link_html + sep + body + "</body>"
-        )
-
-    if info is None:
-        hint = ""
-        if not _gitlab_token() or not _gitlab_base():
-            hint = (
-                "<div style='color:#5c6370;margin-top:6px'>"
-                "Set gitlab_base + gitlab_token in ST4Notes settings for MR details."
-                "</div>"
-            )
-        return (
-            "<body id='stnotes-hover' "
-            "style='margin:8px 12px;font-family:monospace;font-size:0.9em'>"
-            + link_html + hint + "</body>"
-        )
-
-    state = info.get("state", "")
-    state_label = state
-    if info.get("draft"):
-        state_label = f"{state} (draft)" if state else "draft"
-
-    pipe = info.get("pipeline_status", "") or "(none)"
-    rows: list[tuple[str, str, str]] = [
-        ("title", info.get("title", ""), "#cdd9e5"),
-        ("status", state_label, _mr_state_color(state)),
-        ("pipeline", pipe, _pipeline_color(info.get("pipeline_status", ""))),
-    ]
-    if info.get("detailed_merge_status"):
-        rows.append(
-            ("merge", str(info.get("detailed_merge_status")), "#abb2bf")
-        )
-    if info.get("source_branch") and info.get("target_branch"):
-        rows.append(
-            (
-                "branch",
-                f"{info['source_branch']} → {info['target_branch']}",
-                "#5c6370",
-            )
-        )
-    if info.get("author"):
-        rows.append(("author", str(info.get("author")), "#6699cc"))
-
-    col_w = max(len(lbl) for lbl, _, _ in rows) + 2
-    rows_html = "\n".join(
-        f"<span style='color:#5c6370'>{_h((lbl + ':').ljust(col_w))}</span>"
-        f"<span style='color:{col}'>{_h(val)}</span>"
-        for lbl, val, col in rows
-        if val
-    )
-
-    files = info.get("files") or []
-    files_html = ""
-    if files:
-        # Count only real file entries (exclude the “… +N more” placeholder)
-        real_count = sum(
-            1
-            for f in files
-            if (isinstance(f, dict) and f.get("path"))
-            or (isinstance(f, str) and not str(f).startswith("…"))
-        )
-        shown = files[:25]
-        flines_parts: list[str] = []
-        for f in shown:
-            if isinstance(f, dict):
-                label = str(f.get("label") or f.get("path") or "")
-                path = str(f.get("path") or "")
-            else:
-                label = str(f)
-                path = ""
-            if not path:
-                flines_parts.append(
-                    f"<div style='color:#5c6370'>{_h(label)}</div>"
-                )
-                continue
-            diffs_url = _mr_file_diffs_url(url, path)
-            flines_parts.append(
-                f"<div><a href='open:{_h(diffs_url)}' "
-                f"style='color:#abb2bf;text-decoration:none'>"
-                f"{_h(label)}</a></div>"
-            )
-        flines = "\n".join(flines_parts)
-        more = ""
-        if len(files) > 25:
-            more = (
-                f"<div style='color:#5c6370'>"
-                f"… {len(files) - 25} more</div>"
-            )
-        files_html = (
-            sep
-            + f"<div style='color:#5c6370;margin-bottom:4px'>"
-            f"changed files ({real_count or len(files)}) "
-            f"<span style='color:#3e4451'>click → GitLab diffs</span></div>"
-            + f"<div style='white-space:pre;line-height:1.4;max-height:280px;"
-            f"overflow:hidden'>{flines}{more}</div>"
-        )
-
-    return (
-        "<body id='stnotes-hover' "
-        "style='margin:8px 12px;font-family:monospace;font-size:0.9em'>"
-        + link_html
-        + sep
-        + f"<div style='white-space:pre;line-height:1.7'>{rows_html}</div>"
-        + files_html
-        + "</body>"
-    )
+def _is_knowledge_base_view(view: sublime.View) -> bool:
+    if view.settings().get("kb_file") or view.settings().get("stnotes_kb_file"):
+        return True
+    fname = view.file_name() or ""
+    if not fname:
+        return False
+    try:
+        return os.path.realpath(fname) == _knowledge_base_file()
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -4950,6 +3204,8 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
             return
 
         if not _is_stnotes_view(view) and not _is_notes_scratch_view(view):
+            return
+        if _is_knowledge_base_view(view):
             return
 
         line_region = view.line(point)
@@ -4986,6 +3242,13 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
                 self._show_plain_popup(view, point, url)
             return
 
+        # 1b. Inside a kb:… span → leave hover to NotesKbEventListener (not YouTrack)
+        try:
+            if _pure.kb_ref_at_col(line_text, col):
+                return
+        except Exception:
+            pass
+
         # 2. Check for a ticket-ID header:  # PROJ-1234:
         header_id = self._ticket_id_from_header(line_text)
         if header_id:
@@ -5020,9 +3283,15 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
         """
         Scan the entire line for ticket IDs (PROJ-NNN pattern).
         Return the one whose span contains the cursor column.
+        Skip IDs that sit inside a kb:… ref (e.g. kb:other/proj-5124).
         """
         for m in _INLINE_TICKET_RE.finditer(line_text):
             if m.start() <= col <= m.end():
+                try:
+                    if _pure.kb_ref_at_col(line_text, col):
+                        continue
+                except Exception:
+                    pass
                 candidate = m.group(1).upper()
                 if candidate not in (_TODO_ID, _OPS_ID):
                     return candidate
@@ -5063,7 +3332,8 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
     def _show_mr_popup(self, view, point, url):
         view.show_popup(
             (
-                "<body id='stnotes-hover' style='margin:8px 12px;font-family:monospace'>"
+                "<body id='stnotes-hover' "
+            f"style='{_hover_body_style()}'>"
                 f"<a href='open:{_h(url)}' style='color:#56b6c2'>{_h(url)}</a>"
                 "<div style='color:#5c6370;margin-top:6px'>Loading MR…</div>"
                 "</body>"
@@ -5168,7 +3438,7 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
         safe_url = _h(url)
         return (
             "<body id='stnotes-hover' "
-            "style='margin:8px 12px;font-family:monospace'>"
+            f"style='{_hover_body_style()}'>"
             f"<div><a href='open:{safe_url}' "
             f"style='color:#56b6c2;text-decoration:none;font-weight:bold'>"
             f"&#128279; {_h(ticket_id)}</a>"
@@ -5176,22 +3446,83 @@ class NotesUrlHoverListener(sublime_plugin.EventListener):
             "</body>"
         )
 
+
     def _on_navigate(self, href):
+        # Decode HTML entities that _h() may have introduced in hrefs
+        href = (
+            (href or "")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", '"')
+        )
         if href.startswith("open:"):
             target = href[len("open:"):]
-            # Decode HTML entities that _h() may have introduced in hrefs
-            target = (
-                target.replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", '"')
-            )
             _open_in_browser(target)
+            return
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+class NotesJumpTicketCommand(sublime_plugin.TextCommand):
+    """Command: notes_jump_ticket | Alt+Up/Down between # TICKET: headers."""
+
+    def is_enabled(self) -> bool:
+        return bool(self.view.settings().get("stnotes_journal_file"))
+
+    def run(self, edit: sublime.Edit, forward: bool = True) -> None:
+        text = self.view.substr(sublime.Region(0, self.view.size()))
+        regions = _pure.notes_ticket_header_regions(text)
+        if not regions:
+            sublime.status_message("Notes: no ticket headers in journal")
+            return
+        caret = self.view.sel()[0].begin() if self.view.sel() else 0
+        if self.view.sel():
+            sel = self.view.sel()[0]
+            for a, b in regions:
+                if sel.begin() == a and sel.end() == b:
+                    caret = a
+                    break
+        idx = _pure.next_slice_field_index(regions, caret, forward=bool(forward))
+        if idx is None:
+            return
+        a, b = regions[idx]
+        self.view.sel().clear()
+        self.view.sel().add(sublime.Region(a, b))
+        self.view.show_at_center(a)
+
+
+class NotesEditJournalNoteCommand(sublime_plugin.TextCommand):
+    """Enter in View: open a note slice for the selected # HEADER: block."""
+
+    def is_enabled(self) -> bool:
+        return bool(self.view.settings().get("stnotes_journal_file"))
+
+    def run(self, edit: sublime.Edit) -> None:
+        view = self.view
+        window = view.window()
+        if window is None:
+            return
+        text = view.substr(sublime.Region(0, view.size()))
+        caret = view.sel()[0].begin() if view.sel() else 0
+        if view.sel():
+            sel = view.sel()[0]
+            for a, b in _pure.notes_ticket_header_regions(text):
+                if sel.begin() == a and sel.end() == b:
+                    caret = a
+                    break
+        block = _pure.find_journal_block_at_offset(text, caret)
+        if not block:
+            _open_note_slice(window, "", [], replace=False)
+            return
+        orig_date = _pure.journal_date_iso(block.get("date"))
+        _open_note_slice(
+            window,
+            str(block.get("ticket") or ""),
+            list(block.get("body") or []),
+            replace=True,
+            orig_ticket=str(block.get("ticket") or ""),
+            orig_date=orig_date,
+        )
+
 
 class NotesInsertTextCommand(sublime_plugin.TextCommand):
     """Internal: insert text at position 0."""
@@ -5201,81 +3532,118 @@ class NotesInsertTextCommand(sublime_plugin.TextCommand):
 
 
 class NotesReplaceTextCommand(sublime_plugin.TextCommand):
+    """Internal: replace entire view (Windows-safe write when the file is open)."""
+
+    def run(self, edit: sublime.Edit, text: str = "") -> None:
+        self.view.replace(edit, sublime.Region(0, self.view.size()), text)
+
+
+class NotesFillCreateIssueAssigneeCommand(sublime_plugin.TextCommand):
+    """Fill empty assignee: after async /users/me (does not steal the caret)."""
+
+    def run(self, edit: sublime.Edit, value: str = "") -> None:
+        if not self.view.settings().get("stnotes_create_issue"):
+            return
+        email = (value or "").strip()
+        if not email:
+            return
+        text = self.view.substr(sublime.Region(0, self.view.size()))
+        m = re.search(r"(?m)^assignee:[ \t]*$", text)
+        if not m:
+            return
+        self.view.replace(
+            edit, sublime.Region(m.start(), m.end()), f"assignee: {email}"
+        )
+
+
+class NotesLockIssueTicketLineCommand(sublime_plugin.TextCommand):
+    """Restore the read-only ticket: line on an issue slice."""
+
+    def run(self, edit: sublime.Edit, value: str = "") -> None:
+        if not self.view.settings().get("stnotes_create_issue"):
+            return
+        want = (value or "").strip()
+        text = self.view.substr(sublime.Region(0, self.view.size()))
+        m = re.search(r"(?m)^ticket:[ \t]*.*$", text)
+        line = f"ticket: {want}".rstrip()
+        if m:
+            if text[m.start() : m.end()] == line:
+                return
+            self.view.replace(edit, sublime.Region(m.start(), m.end()), line)
+            return
+        ins = re.search(r"(?m)^project:", text)
+        pt = ins.start() if ins else 0
+        self.view.insert(edit, pt, line + "\n")
+
+
+class NotesIssueTicketLockListener(sublime_plugin.ViewEventListener):
+    """ticket: is display-only — YouTrack assigns it, or import already filled it."""
+
+    @classmethod
+    def is_applicable(cls, settings: sublime.Settings) -> bool:
+        return bool(settings.get("stnotes_create_issue"))
+
+    @classmethod
+    def applies_to_primary_view_only(cls) -> bool:
+        return True
+
+    def on_modified_async(self) -> None:
+        view = self.view
+        if not view.is_valid() or view.settings().get("stnotes_issue_ticket_rewriting"):
+            return
+        locked = str(view.settings().get("stnotes_issue_ticket") or "").strip()
+        text = view.substr(sublime.Region(0, view.size()))
+        m = re.search(r"(?m)^ticket:[ \t]*(.*)$", text)
+        current = (m.group(1).strip() if m else "")
+        if current == locked and m:
+            return
+        if not m and not locked:
+            return
+        view.settings().set("stnotes_issue_ticket_rewriting", True)
+        view.run_command("notes_lock_issue_ticket_line", {"value": locked})
+
+        def _clear() -> None:
+            if view.is_valid():
+                view.settings().erase("stnotes_issue_ticket_rewriting")
+
+        sublime.set_timeout(_clear, 0)
+
+
+class NotesReplaceTextCommand(sublime_plugin.TextCommand):
     """Internal: replace entire view content."""
 
     def run(self, edit: sublime.Edit, text: str = "") -> None:
         self.view.replace(edit, sublime.Region(0, self.view.size()), text)
 
 
-# ---------------------------------------------------------------------------
-# YouTrack — parse issue fields
-# ---------------------------------------------------------------------------
+class NotesSliceNextFieldCommand(sublime_plugin.TextCommand):
+    """Command: notes_slice_next_field | Alt+Up/Down select next/prev field value."""
 
-def _parse_youtrack_issue(issue: dict) -> dict[str, str]:
-    """
-    Extract a flat dict of display fields from a raw YouTrack issue dict.
-    Works with both _YT_FIELDS and _YT_LIST_FIELDS response shapes.
-    """
-    result: dict[str, str] = {}
+    def is_enabled(self) -> bool:
+        return bool(self.view.settings().get("stnotes_slice"))
 
-    result["summary"] = (issue.get("summary") or "").strip()
-
-    # created timestamp (only present in full _YT_FIELDS responses)
-    created_ms = issue.get("created")
-    if created_ms:
-        try:
-            dt = datetime.fromtimestamp(int(created_ms) / 1000)
-            result["created"] = dt.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, OSError, OverflowError):
-            pass
-
-    # reporter (only present in full _YT_FIELDS responses)
-    reporter = issue.get("reporter")
-    if isinstance(reporter, dict):
-        full  = (reporter.get("fullName") or "").strip()
-        login = (reporter.get("login") or "").strip()
-        result["reporter"] = full or login
-
-    # custom fields
-    for cf in issue.get("customFields") or []:
-        name  = (cf.get("name") or "").strip()
-        value = cf.get("value")
-        if value is None or not name:
-            continue
-
-        name_lower = name.lower()
-
-        if name_lower == "assignee":
-            if isinstance(value, dict):
-                full  = (value.get("fullName") or "").strip()
-                login = (value.get("login") or "").strip()
-                result["assignee"]       = full or login
-                result["assignee_login"] = login
-            elif isinstance(value, str):
-                result["assignee"]       = value.strip()
-                result["assignee_login"] = value.strip()
-
-        elif name_lower == "state":
-            if isinstance(value, dict):
-                result["state"] = (
-                    value.get("name") or value.get("presentation") or ""
-                ).strip()
-            elif isinstance(value, str):
-                result["state"] = value.strip()
-
-        elif name_lower == "priority":
-            if isinstance(value, dict):
-                result["priority"] = (value.get("name") or "").strip()
-            elif isinstance(value, str):
-                result["priority"] = value.strip()
-
-        elif name_lower in ("severity", "type"):
-            if isinstance(value, dict):
-                result["severity"] = (value.get("name") or "").strip()
-            elif isinstance(value, str):
-                result["severity"] = value.strip()
-
-    return result
+    def run(self, edit: sublime.Edit, forward: bool = True) -> None:
+        view = self.view
+        text = view.substr(sublime.Region(0, view.size()))
+        fields = _pure.slice_field_regions(
+            text, kind=str(view.settings().get("stnotes_slice_kind") or "")
+        )
+        if not fields:
+            return
+        caret = view.sel()[0].begin() if view.sel() else 0
+        if view.sel():
+            sel = view.sel()[0]
+            for a, b in fields:
+                if sel.begin() == a and sel.end() == b:
+                    caret = a
+                    break
+        idx = _pure.next_slice_field_index(fields, caret, forward=bool(forward))
+        if idx is None:
+            return
+        a, b = fields[idx]
+        view.sel().clear()
+        view.sel().add(sublime.Region(a, b))
+        view.show(a)
 
 
 # ---------------------------------------------------------------------------
@@ -5302,6 +3670,121 @@ def _on_settings_change():
         _invalidate_users_cache()
     except Exception:
         pass
+    try:
+        _invalidate_kb_cache()
+    except Exception:
+        pass
+
+
+_GETTING_STARTED_NAME = ".notes getting started"
+
+
+def _notes_seed_demo_enabled() -> bool:
+    try:
+        return bool(_settings().get("notes_seed_demo", True))
+    except Exception:
+        return True
+
+
+def _notes_example_text() -> str:
+    fallback = (
+        "# =============================================================================\n"
+        "# 2026.10.6\n"
+        "# =============================================================================\n\n"
+        "# TODO:\n"
+        "- Command Palette → type .notes\n"
+        "- Hover kb:registry/cleanup-images\n"
+    )
+    return _nc.load_package_resource("examples/ST4Notes.example", fallback)
+
+
+def seed_notes_demo_if_needed() -> bool:
+    """Fill missing/empty journal with examples. Never overwrites non-empty files."""
+    if not _notes_seed_demo_enabled():
+        return False
+    try:
+        path = _notes_file()
+    except Exception:
+        return False
+    if os.path.exists(path):
+        try:
+            if os.path.getsize(path) > 0:
+                return False
+        except OSError:
+            return False
+    try:
+        _write_notes(_notes_example_text().splitlines())
+        return True
+    except Exception:
+        return False
+
+
+def _getting_started_text() -> str:
+    return _nc.load_package_resource(
+        "messages/install.txt",
+        ".notes — getting started\n\nCommand Palette → type .notes\n",
+    )
+
+
+def show_getting_started(window: sublime.Window | None = None) -> None:
+    window = window or sublime.active_window()
+    if window is None:
+        return
+    for v in window.views():
+        if v.name() == _GETTING_STARTED_NAME:
+            window.focus_view(v)
+            return
+    view = window.new_file()
+    view.set_name(_GETTING_STARTED_NAME)
+    view.set_scratch(True)
+    view.settings().set("stnotes_getting_started", True)
+    view.run_command("notes_insert_text", {"text": _getting_started_text()})
+    view.set_read_only(True)
+
+
+def _getting_started_flag_path() -> str:
+    return os.path.join(sublime.cache_path(), "notes", "getting_started_shown")
+
+
+def _maybe_show_getting_started() -> None:
+    try:
+        if not bool(_settings().get("show_getting_started", True)):
+            return
+    except Exception:
+        return
+    flag = _getting_started_flag_path()
+    try:
+        if os.path.exists(flag):
+            return
+    except OSError:
+        pass
+    window = sublime.active_window()
+    if window is None:
+        sublime.set_timeout(_maybe_show_getting_started, 400)
+        return
+    show_getting_started(window)
+    try:
+        os.makedirs(os.path.dirname(flag), exist_ok=True)
+        with open(flag, "w", encoding="utf-8") as fh:
+            fh.write("1\n")
+    except OSError:
+        pass
+
+
+def _after_plugin_loaded() -> None:
+    try:
+        if seed_notes_demo_if_needed():
+            sublime.status_message("Notes: seeded example journal")
+    except Exception:
+        pass
+    _maybe_show_getting_started()
+
+
+class NotesGettingStartedCommand(sublime_plugin.WindowCommand):
+    """Command: notes_getting_started | Hub: Getting started"""
+
+    def run(self) -> None:
+        show_getting_started(self.window)
 
 
 def plugin_loaded():
@@ -5311,6 +3794,8 @@ def plugin_loaded():
         s.add_on_change(_SETTINGS_LISTENER_KEY, _on_settings_change)
     except Exception:
         pass
+    # Defer so windows exist and load_resource works (Package Control / symlink).
+    sublime.set_timeout(_after_plugin_loaded, 400)
 
 
 def plugin_unloaded():
@@ -5333,6 +3818,10 @@ def plugin_unloaded():
         pass
     try:
         _invalidate_users_cache()
+    except Exception:
+        pass
+    try:
+        _invalidate_kb_cache()
     except Exception:
         pass
     try:

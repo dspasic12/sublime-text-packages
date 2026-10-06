@@ -11,6 +11,10 @@
                         "command": "kubetools_hub"
                     },
                     {
+                        "caption": "Create…",
+                        "command": "kubetools_create"
+                    },
+                    {
                         "caption": "-"
                     },
                     {
@@ -51,10 +55,6 @@
                     {
                         "caption": "Unseal Selected Text",
                         "command": "kubetools_unseal"
-                    },
-                    {
-                        "caption": "Validate Seal Config",
-                        "command": "kubetools_seal_validate_config"
                     },
                     {
                         "caption": "-"
@@ -106,13 +106,6 @@
                                     "user_file": "${packages}/User/Default (${platform}).sublime-keymap",
                                     "default": "[\n\t$0\n]\n"
                                 }
-                            },
-                            {
-                                "caption": "-"
-                            },
-                            {
-                                "caption": "Validate Seal Config",
-                                "command": "kubetools_seal_validate_config"
                             }
                         ]
                     }

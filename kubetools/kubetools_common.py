@@ -38,6 +38,34 @@ def clamp_timeout(value, default=60, minimum=5, maximum=600):
     return n
 
 
+def try_fchmod(fd, mode=0o600):
+    """Best-effort fd mode. ``os.fchmod`` is missing on Windows."""
+    fn = getattr(os, "fchmod", None)
+    if not callable(fn):
+        return
+    try:
+        fn(fd, mode)
+    except OSError:
+        pass
+
+
+def try_chmod(path, mode=0o600):
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def path_is_under(path, root):
+    """True if ``path`` is ``root`` or a descendant (normcase — Windows-safe)."""
+    try:
+        real = os.path.normcase(os.path.realpath(path))
+        base = os.path.normcase(os.path.realpath(root))
+    except OSError:
+        return False
+    return real == base or real.startswith(base + os.sep)
+
+
 def expand_path(path):
     """Expand ${home}/${packages}/~ and normalize."""
     if not path:
@@ -77,7 +105,8 @@ def validate_binary_path(path, label="binary"):
         return None
     if not os.path.isfile(path):
         return "{} not found: {}".format(label, path)
-    if not os.access(path, os.X_OK):
+    # Windows has no Unix execute bit; os.access(X_OK) is not meaningful.
+    if os.name != "nt" and not os.access(path, os.X_OK):
         return "{} is not executable: {}".format(label, path)
     return None
 
@@ -86,10 +115,19 @@ def find_binary(name, extra_dirs=None):
     """Return absolute path to ``name`` on PATH (+ extras) or None."""
     path_env = os.environ.get("PATH", "")
     extras = list(extra_dirs or []) + [
+        os.path.expanduser("~/.local/bin"),
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",
+        "/snap/bin",
     ]
+    if os.name == "nt":
+        extras.extend(
+            [
+                os.path.expanduser(r"~\scoop\shims"),
+                os.path.expandvars(r"%ProgramData%\chocolatey\bin"),
+            ]
+        )
     search_dirs = path_env.split(os.pathsep) + extras
     seen = set()
     for d in search_dirs:
@@ -180,16 +218,11 @@ def write_temp_under_tmpdir(content, suffix=".yaml", forbid_path=None, prefix="k
     try:
         if forbid_path and paths_are_same_file(path, forbid_path):
             raise RuntimeError("Refused temp path colliding with open file")
-        tmp_root = os.path.realpath(tempfile.gettempdir())
-        if not os.path.realpath(path).startswith(tmp_root + os.sep) and os.path.realpath(
-            path
-        ) != tmp_root:
+        tmp_root = tempfile.gettempdir()
+        if not path_is_under(path, tmp_root):
             raise RuntimeError("Refused temp path outside tempfile dir: {}".format(path))
-        try:
-            os.fchmod(fd, 0o600)
-        except OSError:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        try_fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(content)
             if content and not content.endswith("\n"):
                 handle.write("\n")
@@ -211,17 +244,14 @@ def write_atomic_in_dir(output_path, content, prefix=".kubetools-tmp-"):
     directory = os.path.dirname(output_path) or "."
     fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=".yaml", dir=directory)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content if content.endswith("\n") else content + "\n")
             fh.flush()
             try:
                 os.fsync(fh.fileno())
             except OSError:
                 pass
-        try:
-            os.chmod(tmp_path, 0o600)
-        except OSError:
-            pass
+        try_chmod(tmp_path, 0o600)
         os.replace(tmp_path, output_path)
     except Exception:
         try:
@@ -491,3 +521,187 @@ def guess_name_index(names, file_path, aliases=None):
             best_score = score
             best_i = i
     return best_i if best_score > 0 else -1
+
+
+def looks_like_sealed_secret(content):
+    """Heuristic: buffer already looks like a SealedSecret."""
+    if not content:
+        return False
+    head = content[:4000]
+    return bool(re.search(r"(?m)^kind:\s*SealedSecret\s*$", head)) or (
+        '"kind"' in head and "SealedSecret" in head
+    )
+
+
+def looks_like_plain_secret(content):
+    """Heuristic: core/v1 Secret (not a SealedSecret)."""
+    if not content:
+        return False
+    head = content[:4000]
+    has_secret_kind = bool(re.search(r"(?m)^kind:\s*Secret\s*$", head)) or (
+        '"kind"' in head and re.search(r'"kind"\s*:\s*"Secret"', head)
+    )
+    return bool(has_secret_kind) and not looks_like_sealed_secret(content)
+
+
+def looks_like_k8s_manifest(content):
+    """True when the buffer has apiVersion + kind + metadata.name (YAML)."""
+    if not content or not str(content).strip():
+        return False
+    head = str(content)[:16000]
+    if looks_like_sealed_secret(head) or looks_like_plain_secret(head):
+        return True
+    has_kind = re.search(r"(?m)^kind:\s*\S+", head)
+    has_api = re.search(r"(?m)^apiVersion:\s*\S+", head)
+    has_name = re.search(r"(?m)^[ \t]+name:\s*\S+", head)
+    return bool(has_kind and has_api and has_name)
+
+
+EXAMPLE_TEMPLATE_NAMESPACE = "CHANGE-ME"
+
+_EXAMPLE_NS_LINE_RE = re.compile(
+    r'(?m)^[ \t]+namespace:\s*["\']?CHANGE-ME["\']?\s*$'
+)
+
+
+def example_namespace_unchanged(content):
+    """True when a create-template still has the sentinel namespace."""
+    if not content:
+        return False
+    return bool(_EXAMPLE_NS_LINE_RE.search(str(content)))
+
+
+TEMPLATE_RESOURCE_NAMES = frozenset({"example", "example-secrets"})
+PROTECTED_NAMESPACES = frozenset(
+    {"kube-system", "kube-public", "kube-node-lease"}
+)
+
+_HELM_BASENAME_EXACT = frozenset(
+    {"chart.yaml", "chart.lock", "values.yaml", "cluster-common.yaml"}
+)
+_HELM_TPL_RE = re.compile(r"\{\{-?")
+_ARGO_KIND_RE = re.compile(
+    r"(?m)^kind:\s*(Application|ApplicationSet|AppProject)\s*$"
+)
+_APPLIED_LINE_RE = re.compile(r"(?m)^# applied:.*\n")
+_GITOPS_PATH_PARTS = frozenset(
+    {"bootstrap", "environments", "sealed-secrets", "shared-configmaps"}
+)
+
+
+def looks_like_helm_source(path, content=""):
+    """Helm chart / values / Go-template — never kubectl apply."""
+    base = os.path.basename(path or "").lower()
+    if base in _HELM_BASENAME_EXACT:
+        return True
+    if base.endswith("-values.yaml") or base.endswith("-values-override.yaml"):
+        return True
+    if base.startswith("values-") and base.endswith((".yaml", ".yml")):
+        return True
+    parts = [p.lower() for p in normalize_path_segments(path)]
+    if "templates" in parts or "charts" in parts:
+        return True
+    head = str(content or "")[:16000]
+    if _HELM_TPL_RE.search(head):
+        return True
+    if (
+        re.search(r"(?m)^apiVersion:\s*v2\s*$", head)
+        and re.search(r"(?m)^version:\s*\S", head)
+        and not re.search(r"(?m)^kind:\s+\S", head)
+    ):
+        return True
+    return False
+
+
+def looks_like_gitops_source(path):
+    """apps-gitops / Argo bootstrap trees — never kubectl apply."""
+    if not path:
+        return False
+    base = os.path.basename(path).lower()
+    if base in ("kustomization.yaml", "kustomization.yml"):
+        return True
+    parts = [p.lower() for p in normalize_path_segments(path)]
+    return bool(_GITOPS_PATH_PARTS.intersection(parts))
+
+
+def looks_like_argo_cd_manifest(content):
+    head = str(content or "")[:16000]
+    if "argoproj.io" not in head:
+        return False
+    return bool(_ARGO_KIND_RE.search(head))
+
+
+def example_resource_name_unchanged(name):
+    n = (name or "").strip().strip("\"'")
+    return n in TEMPLATE_RESOURCE_NAMES
+
+
+def is_protected_namespace(name):
+    return (name or "").strip().lower() in PROTECTED_NAMESPACES
+
+
+def stamp_applied_header(text, stamp):
+    """Prepend or refresh ``# applied: <stamp>`` at the top of the buffer."""
+    line = "# applied: {}\n".format(stamp)
+    body = text or ""
+    if _APPLIED_LINE_RE.search(body):
+        return _APPLIED_LINE_RE.sub(line, body, count=1)
+    return line + body
+
+
+def mutating_source_block_reason(path, content):
+    """Why Apply/Dry-Run must not run (Helm / GitOps / Argo CD). Else None."""
+    if looks_like_helm_source(path, content):
+        return "Helm charts, values, and templates are never applied"
+    if looks_like_gitops_source(path):
+        return "GitOps / bootstrap paths are never applied"
+    if looks_like_argo_cd_manifest(content):
+        return "Argo CD Application CRs are never applied from Kubetools"
+    return None
+
+
+_YAML_SCALAR_FIELD_RE = re.compile(
+    r"^(\s*(?:-\s+)*)([A-Za-z0-9][A-Za-z0-9./_-]*)\s*:\s+(\S.*)$"
+)
+
+
+def yaml_scalar_field_regions(text):
+    """Offsets of YAML ``key: scalar`` values (skip comments, empties, block keys)."""
+    fields = []
+    pos = 0
+    for line in (text or "").splitlines(keepends=True):
+        raw = line.rstrip("\r\n")
+        stripped = raw.strip()
+        if stripped and not stripped.startswith("#") and stripped != "---":
+            m = _YAML_SCALAR_FIELD_RE.match(raw)
+            if m:
+                val = m.group(3).strip()
+                if val not in ("|", ">", "|-", ">-", "{}", "[]"):
+                    fields.append((pos + m.start(3), pos + m.end(3)))
+        pos += len(line)
+    return fields
+
+
+def next_field_index(fields, caret, *, forward=True):
+    """Index of the next/previous field, wrapping. None if no fields."""
+    if not fields:
+        return None
+    current = None
+    for i, (a, b) in enumerate(fields):
+        end = b if b > a else a
+        if a <= caret <= end:
+            current = i
+            break
+    n = len(fields)
+    if current is None:
+        if forward:
+            for i, (a, _b) in enumerate(fields):
+                if a >= caret:
+                    return i
+            return 0
+        for i, (_a, b) in reversed(list(enumerate(fields))):
+            if b <= caret:
+                return i
+        return n - 1
+    return (current + (1 if forward else -1)) % n
+

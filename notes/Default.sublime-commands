@@ -1,42 +1,30 @@
 [
     {
-        "caption": "Notes: Add",
+        "caption": ".notes - Hub",
+        "command": "notes_hub"
+    },
+    {
+        "caption": ".notes - Add",
         "command": "notes_add"
     },
     {
-        "caption": "Notes: Commit Description",
-        "command": "notes_commit_description"
+        "caption": ".notes - View",
+        "command": "notes_view"
     },
     {
-        "caption": "Notes: Edit",
-        "command": "notes_edit"
-    },
-    {
-        "caption": "Notes: Search",
+        "caption": ".notes - Search",
         "command": "notes_search"
     },
     {
-        "caption": "Notes: Search Recently Resolved",
+        "caption": ".notes - Search Recently Resolved",
         "command": "notes_search_resolved"
     },
     {
-        "caption": "Notes: Open Issue",
+        "caption": ".notes - Open Issue",
         "command": "notes_open_issue"
     },
     {
-        "caption": "Notes: Weekly Summary",
-        "command": "notes_weekly_summary"
-    },
-    {
-        "caption": "Notes: Weekly Search",
-        "command": "notes_weekly_search"
-    },
-    {
-        "caption": "Notes: Create Issue",
-        "command": "notes_create_issue"
-    },
-    {
-        "caption": "Notes: Settings",
+        "caption": ".notes - Settings",
         "command": "notes_settings"
     }
 ]

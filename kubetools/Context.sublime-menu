@@ -4,6 +4,10 @@
         "command": "kubetools_hub"
     },
     {
+        "caption": ".kubetools - Create…",
+        "command": "kubetools_create"
+    },
+    {
         "caption": ".kubetools - Compare State",
         "command": "kubetools_compare_state"
     },

@@ -198,25 +198,41 @@ def build_full_seal_command(cert_path):
     return ['kubeseal', '--format=yaml', '--cert', cert_path]
 
 
-def looks_like_sealed_secret(content):
-    """Heuristic: buffer already looks like a SealedSecret (do not re-seal)."""
-    if not content:
+def _view_text_head(view, limit=16000):
+    if view is None:
+        return ""
+    try:
+        return view.substr(sublime.Region(0, min(view.size(), limit)))
+    except Exception:
+        return ""
+
+
+def _view_can_seal(view):
+    if view is None or view.is_read_only():
         return False
-    head = content[:2000]
-    return bool(re.search(r'(?m)^kind:\s*SealedSecret\s*$', head)) or (
-        '"kind"' in head and 'SealedSecret' in head
-    )
+    content = _view_text_head(view)
+    has_sel = any(not r.empty() for r in view.sel())
+    if looks_like_plain_secret(content):
+        return not has_sel
+    if looks_like_sealed_secret(content):
+        return has_sel
+    return False
+
+
+def _view_can_unseal(view):
+    if view is None:
+        return False
+    if not any(not r.empty() for r in view.sel()):
+        return False
+    return looks_like_sealed_secret(_view_text_head(view))
+
+
+def looks_like_sealed_secret(content):
+    return _ktc.looks_like_sealed_secret(content)
 
 
 def looks_like_plain_secret(content):
-    """Heuristic: buffer looks like a core/v1 Secret suitable for full-file seal."""
-    if not content:
-        return False
-    head = content[:4000]
-    has_secret_kind = bool(re.search(r'(?m)^kind:\s*Secret\s*$', head)) or (
-        '"kind"' in head and re.search(r'"kind"\s*:\s*"Secret"', head)
-    )
-    return has_secret_kind and not looks_like_sealed_secret(content)
+    return _ktc.looks_like_plain_secret(content)
 
 
 def secret_has_payload(content):
@@ -664,7 +680,10 @@ class _SealBase(sublime_plugin.TextCommand):
             )
             return
 
-        file_name = self.view.file_name()
+        file_name = getattr(self, "_file_name", None)
+        if file_name is None and self.view is not None:
+            file_name = self.view.file_name()
+            self._file_name = file_name
         guessed = guess_stage_index(file_name, stages)
 
         default_name = self.settings.get('last_stage') or self.settings.get('default_stage')
@@ -764,10 +783,10 @@ class KubetoolsSealCommand(_SealBase):
     """
 
     def is_enabled(self):
-        return self.view is not None and not self.view.is_read_only()
+        return _view_can_seal(self.view)
 
     def is_visible(self):
-        return True
+        return self.is_enabled()
 
     def run(self, edit):
         if self.view.is_read_only():
@@ -775,6 +794,7 @@ class KubetoolsSealCommand(_SealBase):
             return
 
         self.settings = self.get_settings()
+        self._file_name = self.view.file_name() if self.view else None
         self._mode = None
         self.stage = None
         self.regions = []
@@ -822,7 +842,10 @@ class KubetoolsSealCommand(_SealBase):
         return None
 
     def _precheck_full_file_seal(self):
-        file_name = self.view.file_name()
+        file_name = getattr(self, "_file_name", None)
+        if file_name is None and self.view is not None:
+            file_name = self.view.file_name()
+            self._file_name = file_name
         if not file_name:
             return (
                 'Save the file first (needed to derive *-sealedsecret.yaml output path), '
@@ -900,7 +923,9 @@ class KubetoolsSealCommand(_SealBase):
             )
 
     def _seal_entire_file(self):
-        file_name = self.view.file_name()
+        file_name = getattr(self, "_file_name", None) or (
+            self.view.file_name() if self.view else None
+        )
         output_path = derive_sealedsecret_output_path(file_name)
         file_content = self.view.substr(sublime.Region(0, self.view.size()))
 
@@ -1183,12 +1208,14 @@ class KubetoolsUnsealCommand(_SealBase):
     """Decrypt sealed secret using private key (offline)."""
 
     def is_enabled(self):
-        if self.view is None:
-            return False
-        return any(not r.empty() for r in self.view.sel())
+        return _view_can_unseal(self.view)
+
+    def is_visible(self):
+        return self.is_enabled()
 
     def run(self, edit):
         self.settings = self.get_settings()
+        self._file_name = self.view.file_name() if self.view else None
 
         selected_text = ''
         for region in self.view.sel():
@@ -1408,7 +1435,6 @@ class KubetoolsUnsealCommand(_SealBase):
         stage = self.stage['name'] if self.stage else '?'
         new_view.set_name('DO-NOT-COMMIT decrypted [{}]: {}/{}'.format(stage, namespace, secret_name))
         new_view.set_scratch(True)  # avoid accidental save prompts / git commits
-        new_view.set_read_only(True)
         if content.lstrip().startswith('{'):
             try:
                 new_view.set_syntax_file('Packages/JSON/JSON.sublime-syntax')
@@ -1489,6 +1515,7 @@ class KubetoolsSealReplaceRegionsCommand(sublime_plugin.TextCommand):
 class KubetoolsSealInsertContentCommand(sublime_plugin.TextCommand):
     def run(self, edit, content):
         self.view.insert(edit, 0, content)
+        self.view.set_read_only(True)
 
 
 # ---------------------------------------------------------------------------
@@ -1497,6 +1524,10 @@ class KubetoolsSealInsertContentCommand(sublime_plugin.TextCommand):
 
 class KubetoolsSealValidateConfigCommand(sublime_plugin.ApplicationCommand):
     def run(self):
+        sublime.status_message("Kubetools: validating seal config...")
+        sublime.set_timeout_async(self._validate_async, 0)
+
+    def _validate_async(self):
         settings = load_seal_settings_obj()
         stages = normalize_stages(settings.get('stages', []))
         for stage in stages:
@@ -1546,9 +1577,8 @@ class KubetoolsSealValidateConfigCommand(sublime_plugin.ApplicationCommand):
                     problems.append('[{}] has neither cert_path nor private_key_path'.format(s['name']))
 
         if problems:
-            sublime.error_message(
-                'Kubetools seal configuration problems:\n- ' + '\n- '.join(problems)
-            )
+            msg = 'Kubetools seal configuration problems:\n- ' + '\n- '.join(problems)
+            sublime.set_timeout(lambda m=msg: sublime.error_message(m), 0)
         else:
             stage_lines = []
             for s in stages:
@@ -1559,16 +1589,15 @@ class KubetoolsSealValidateConfigCommand(sublime_plugin.ApplicationCommand):
                         'yes' if s.get('private_key_path') and os.path.isfile(s['private_key_path']) else 'no',
                     )
                 )
-            sublime.message_dialog(
-                'Kubetools seal configuration OK.\n\nkubeseal: {}\n\nStages:\n{}'.format(
-                    version or binary,
-                    '\n'.join(stage_lines) if stage_lines else '(legacy single key)',
-                )
+            ok = 'Kubetools seal configuration OK.\n\nkubeseal: {}\n\nStages:\n{}'.format(
+                version or binary,
+                '\n'.join(stage_lines) if stage_lines else '(legacy single key)',
             )
+            sublime.set_timeout(lambda m=ok: sublime.message_dialog(m), 0)
 
 
-class KubetoolsOpenSealSettingsCommand(sublime_plugin.ApplicationCommand):
+class KubetoolsOpenSealSettingsCommand(sublime_plugin.WindowCommand):
     """Alias → Kubetools settings (stages live there now)."""
 
     def run(self):
-        sublime.run_command('kubetools_open_settings')
+        self.window.run_command("kubetools_open_settings")

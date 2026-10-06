@@ -1,9 +1,19 @@
-# User manual — Kubetools & ST4Notes
+# User manual — Kubetools, notes, kb
 
 Author: **Dusan Spasic**
 
-Quick onboarding for new users. Both packages are **optional**: install Kubetools
-for Kubernetes YAML, ST4Notes for daily notes and YouTrack/GitLab.
+Quick onboarding for new users. Packages are **optional**: install Kubetools
+for Kubernetes YAML, **notes** for daily notes and YouTrack/GitLab, **kb** for
+the knowledge base (`.kb`). Overlap notes↔kb is only `kb:` refs and hover.
+
+| Package folder | Command Palette | Preferences → Package Settings | Settings file |
+|----------------|-----------------|--------------------------------|---------------|
+| `kubetools` | **`.kubetools`** | Kubetools | `Kubetools.sublime-settings` |
+| `notes` | **`.notes`** | notes | `ST4Notes.sublime-settings` (legacy basename) |
+| `kb` | **`.kb`** | kb | `KB.sublime-settings` (falls back to ST4Notes `knowledge_base_file`) |
+
+`ST4Notes` is only the **syntax / settings resource name** (and default notes
+filename). The installable package and palette prefix are **`notes` / `.notes`**.
 
 ---
 
@@ -15,7 +25,9 @@ for Kubernetes YAML, ST4Notes for daily notes and YouTrack/GitLab.
 | Kubetools overrides | `Packages/User/Kubetools.sublime-settings` | **No** — local only |
 | ST4Notes defaults | `Packages/notes/ST4Notes.sublime-settings` | Yes (in repo) |
 | ST4Notes overrides | `Packages/User/ST4Notes.sublime-settings` | **No** — tokens here |
-| Legacy Kubeseal | `Packages/User/Kubeseal.sublime-settings` | **No** — leave `stages: []` |
+| KB defaults | `Packages/kb/KB.sublime-settings` | Yes (in repo) |
+| KB overrides | `Packages/User/KB.sublime-settings` | **No** — local path / hover prefs |
+| Legacy User file (optional) | `Packages/User/Kubeseal.sublime-settings` | **No** — leave `stages: []` if the file still exists |
 
 Sublime merges **Default + User**. Put secrets, cluster cert paths, and personal
 URLs only in **User**.
@@ -51,8 +63,9 @@ repo):
 
 Maintain **`stages` only in `User/Kubetools.sublime-settings`**.
 
-Set **`User/Kubeseal.sublime-settings`** to `"stages": []` so you never edit two
-files. The deprecated Kubeseal package forwards to Kubetools.
+Set any leftover **`User/Kubeseal.sublime-settings`** to `"stages": []`. The
+Kubeseal *package* is gone; Kubetools still reads that User file once as a
+migration fallback.
 
 ### When GitOps adds a cluster
 
@@ -81,11 +94,11 @@ Kubetools User settings, e.g.:
 
 ---
 
-## ST4Notes — `issue_stages` (do not confuse with Kubetools)
+## notes — `issue_stages` (do not confuse with Kubetools)
 
 ### What `issue_stages` are
 
-Used only by **Notes: Create Issue** when you create **sub-tasks** under a parent
+Used only by **.notes - Add → Issue** when you create **sub-tasks** under a parent
 ticket. Each entry becomes part of the child summary:
 
 ```text
@@ -115,16 +128,44 @@ Create Issue will prompt once and can save your comma-separated list for next ti
 "issue_stages": ["Design", "Dev", "QA", "Deploy"]
 ```
 
-### Other ST4Notes keys
+### Other notes keys
 
 | Key | Purpose |
 |-----|---------|
 | `default_project` | YouTrack project shortName (e.g. `MYPROJECT`) |
 | `youtrack_base` / `youtrack_token` | API + browser links (HTTPS only) |
 | `gitlab_base` / `gitlab_token` | MR hover (`read_api`) |
+| `post_comments` | YouTrack comment on Add-from-list / Import only, when the heading looks like `PROJ-1234`. Off by default. New note never comments. |
 | `notes_file` / `notes_path_jail` | Local notes file must stay under jail (default `$HOME`) |
 
-Never commit real tokens. Package defaults keep tokens empty.
+Never commit real tokens. Package defaults keep tokens empty. Your
+`Packages/User/*.sublime-settings` files stay local and are not part of this
+repo.
+
+---
+
+## Platforms (macOS, Windows, Linux)
+
+All three packages run on **Sublime Text 4 Build 4205+** (Python 3.14 plugin host)
+on macOS, Windows, Ubuntu, and Arch.
+
+| | Default |
+|--|---------|
+| Journal | `~/Documents/ST4Notes` (`%USERPROFILE%\Documents\ST4Notes` on Windows) |
+| Knowledge base | `~/Documents/ST4Notes-kb` |
+| Jail | home directory (`~`) |
+
+The `Documents` folder is created if missing. If Windows OneDrive or a localized
+Linux XDG name (`Dokumente`, …) is your real Documents library, set `notes_file`
+/ `knowledge_base_file` in User settings.
+
+GUI Sublime often has a thinner `PATH` than a login shell. If `kubectl` / `kubeseal`
+are not found: set `kubectl_path` / `kubeseal_path`, or on Linux ensure
+`~/.local/bin` / `/snap/bin` (already searched). Homebrew paths are searched on
+macOS.
+
+Commit a slice with **Cmd+Shift+Enter** (macOS) or **Ctrl+Shift+Enter** (Windows /
+Linux). Kubetools hub chords are **Ctrl+K** then a letter (YAML/JSON only).
 
 ---
 
@@ -135,19 +176,20 @@ Never commit real tokens. Package defaults keep tokens empty.
 1. Install package folder **`kubetools`** (symlink or Package Control).
 2. Ensure `kubectl` (and `kubeseal` for seal) on PATH, or set paths in User settings.
 3. Add `stages` in **User/Kubetools.sublime-settings** pointing at your GitOps `pub.pem` files.
-4. Set `User/Kubeseal.sublime-settings` → `"stages": []`.
+4. If `User/Kubeseal.sublime-settings` still exists, set `"stages": []`.
 5. Open a Kubernetes YAML → **`.kubetools - Compare State`** or hub (**Ctrl+K**, **H** in YAML).
 
-### ST4Notes
+### notes
 
 1. Install package folder **`notes`**.
 2. **User/ST4Notes.sublime-settings**: `youtrack_base`, `youtrack_token`, `default_project`.
 3. Set `issue_stages` to `[]` or workflow labels — **not** cluster names.
-4. **Notes: Edit** to create/open notes file; **Notes: Add** for daily entries.
+4. Command Palette → type **`.notes`** → Hub / Add / View / Search.
+5. **.notes - View** for the daily file; **`.kb`** for topics/subjects.
 
 ---
 
-## Should Kubetools and ST4Notes be one package?
+## Should Kubetools and notes be one package?
 
 **Short answer: keep them separate** unless you only ever ship to yourself and want one symlink.
 
@@ -155,7 +197,7 @@ Never commit real tokens. Package defaults keep tokens empty.
 |--|------------------------|---------------------|
 | Install | Pick Kubetools and/or Notes | One install, larger bundle |
 | Settings | Clear split (`Kubetools.sublime-settings` vs `ST4Notes.sublime-settings`) | One settings file or nested keys — harder for new users |
-| Command palette | `.kube…` vs `Notes:…` | Still need naming; easy to clutter |
+| Command palette | `.kubetools…` vs `.notes…` | Still need naming; easy to clutter |
 | Dependencies | kubectl/kubeseal vs YouTrack/GitLab | Users who only want notes still load k8s code (and vice versa) |
 | Releases | Version/fix notes independently | Every notes fix re-releases kubetools |
 | Code sharing | Small overlap (HTTP scrub, daemon threads) | Could add `shared_util.py` **without** merging packages |

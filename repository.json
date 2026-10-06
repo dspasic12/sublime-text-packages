@@ -2,42 +2,8 @@
     "schema_version": "3.0.0",
     "packages": [
         {
-            "name": "Kubeseal",
-            "description": "DEPRECATED shim — use Kubetools Seal/Unseal. Forwards encrypt/decrypt commands.",
-            "author": "Dusan Spasic",
-            "details": "https://github.com/dspasic12/sublime-text-packages",
-            "homepage": "https://github.com/dspasic12/sublime-text-packages",
-            "issues": "https://github.com/dspasic12/sublime-text-packages/issues",
-            "readme": "https://raw.githubusercontent.com/dspasic12/sublime-text-packages/main/Kubeseal/readme",
-            "releases": [
-                {
-                    "version": "1.0.0",
-                    "url": "https://github.com/dspasic12/sublime-text-packages/releases/download/v1.0.0/kubeseal.zip",
-                    "date": "2026-02-06 12:00:00",
-                    "sublime_text": ">=3000"
-                }
-            ]
-        },
-        {
-            "name": "Kubeapply",
-            "description": "DEPRECATED — use Kubetools. Safely kubectl-apply the open Kubernetes YAML from Sublime Text",
-            "author": "Dusan Spasic",
-            "details": "https://github.com/dspasic12/sublime-text-packages",
-            "homepage": "https://github.com/dspasic12/sublime-text-packages",
-            "issues": "https://github.com/dspasic12/sublime-text-packages/issues",
-            "readme": "https://raw.githubusercontent.com/dspasic12/sublime-text-packages/main/kubeapply/readme",
-            "releases": [
-                {
-                    "version": "1.0.0",
-                    "url": "https://github.com/dspasic12/sublime-text-packages/releases/download/v1.0.0/kubeapply.zip",
-                    "date": "2026-09-10 12:00:00",
-                    "sublime_text": ">=4000"
-                }
-            ]
-        },
-        {
             "name": "kubetools",
-            "description": "Compare YAML to live cluster; apply/dry-run; seal/unseal (kubeseal) with safety locks",
+            "description": "Create-slice apply, compare YAML to live cluster, dry-run, seal/unseal (kubeseal) with safety locks",
             "author": "Dusan Spasic",
             "details": "https://github.com/dspasic12/sublime-text-packages",
             "homepage": "https://github.com/dspasic12/sublime-text-packages",
@@ -48,14 +14,16 @@
                     "version": "1.1.0",
                     "url": "https://github.com/dspasic12/sublime-text-packages/releases/download/v1.1.0/kubetools.zip",
                     "date": "2026-10-01 13:00:00",
-                    "sublime_text": ">=4169",
-                    "platforms": ["*"]
+                    "sublime_text": ">=4205",
+                    "platforms": [
+                        "*"
+                    ]
                 }
             ]
         },
         {
             "name": "notes",
-            "description": "Daily notes + optional YouTrack / GitLab integration (ST4Notes)",
+            "description": "Daily notes + optional YouTrack / GitLab (.notes Command Palette; settings: ST4Notes.sublime-settings). Knowledge base is the separate kb package.",
             "author": "Dusan Spasic",
             "details": "https://github.com/dspasic12/sublime-text-packages",
             "homepage": "https://github.com/dspasic12/sublime-text-packages",
@@ -66,8 +34,30 @@
                     "version": "1.1.0",
                     "url": "https://github.com/dspasic12/sublime-text-packages/releases/download/v1.1.0/notes.zip",
                     "date": "2026-10-01 13:00:00",
-                    "sublime_text": ">=4169",
-                    "platforms": ["*"]
+                    "sublime_text": ">=4205",
+                    "platforms": [
+                        "*"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "kb",
+            "description": "Knowledge base: topics / subjects / kb: refs (.kb Command Palette; settings: KB.sublime-settings)",
+            "author": "Dusan Spasic",
+            "details": "https://github.com/dspasic12/sublime-text-packages",
+            "homepage": "https://github.com/dspasic12/sublime-text-packages",
+            "issues": "https://github.com/dspasic12/sublime-text-packages/issues",
+            "readme": "https://raw.githubusercontent.com/dspasic12/sublime-text-packages/main/kb/readme",
+            "releases": [
+                {
+                    "version": "1.1.0",
+                    "url": "https://github.com/dspasic12/sublime-text-packages/releases/download/v1.1.0/kb.zip",
+                    "date": "2026-10-06 12:00:00",
+                    "sublime_text": ">=4205",
+                    "platforms": [
+                        "*"
+                    ]
                 }
             ]
         }

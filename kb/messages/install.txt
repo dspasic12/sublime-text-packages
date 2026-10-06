@@ -1,0 +1,27 @@
+.kb — getting started
+=====================
+
+Command Palette (Cmd/Ctrl+Shift+P) → type  .kb
+
+Knowledge base file (topics / subjects; git-friendly)
+  ~/Documents/ST4Notes-kb
+  Override in User/KB (or ST4Notes) if Documents is OneDrive or localized (e.g. Dokumente)
+
+First 30 seconds
+  1. .kb - Hub                 browse / create / move subjects
+  2. Hover kb:registry/cleanup-images  (also works in the notes journal)
+  3. Cmd/Ctrl+Shift+Enter      commit an edit-slice (never type in the KB file)
+
+Slices
+  Create Subject / Edit Subject open a scratch "slice".
+  Fields sit above --- ; body below. Alt+Up/Down cycles fields.
+  Close the tab to cancel. Nothing is written until you commit.
+
+Insert a ref into notes or any buffer
+  .kb - Insert Ref  →  kb:topic/subject
+
+Re-open this page:  .kb - Hub → Getting started
+
+Requires Sublime Text 4, Python 3.14 plugin host (build 4205+).
+Package folder name must be "kb".
+The notes package is optional; overlap is only kb: refs + hover.

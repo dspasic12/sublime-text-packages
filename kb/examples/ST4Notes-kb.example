@@ -1,0 +1,56 @@
+# .kb demo — replace or extend; safe to commit to git
+# Format: optional # TOPIC: … then ## SUBJECT: …
+#   - subject before any TOPIC (or under "# TOPIC: other") → topic **other**
+# Refs: kb:topic/subject  or  kb:subject (implies other)
+# Metadata:  - created: YYYY-MM-DD   - modified: YYYY-MM-DD (bumped on commit)
+# Secrets: obfuscate with context menu .kb - Obfuscate (selection required) → ⟦secret:base64⟧ (not encryption)
+
+# TOPIC: Registry
+
+## SUBJECT: cleanup images
+- created: 2026-10-06
+- modified: 2026-10-06
+Retention then garbage-collect. Dry-run first.
+
+```bash
+# example registry CLI — replace with your tool
+registryctl retention run --project demo --dry-run
+registryctl gc now --dry-run
+```
+
+## SUBJECT: robot account
+- created: 2026-10-06
+- modified: 2026-10-06
+Pull-only robot. Token is a mock — hover / ⧉ still works:
+
+- robot token: ⟦secret:cmVnaXN0cnktcm9ib3QtdG9rZW4tbm90LXJlYWw=⟧
+
+```bash
+curl -fsS -u "robot\$demo+ci:${REGISTRY_ROBOT_TOKEN}" \
+  "https://registry.example.com/v2/_catalog" | jq .
+```
+
+
+# TOPIC: Notes plugin
+
+## SUBJECT: kb refs
+- created: 2026-10-06
+- modified: 2026-10-06
+Inline: `kb:<topic>/<subject>` or short `kb:<subject>` (topic **other**).
+
+```text
+kb:registry/cleanup-images
+kb:example-ticket
+```
+
+Edit a subject from hover / Browse (not by typing in this file). Commit the slice with Cmd/Ctrl+Shift+Enter.
+
+
+# TOPIC: other
+
+## SUBJECT: EXAMPLE-TICKET
+- created: 2026-10-06
+- modified: 2026-10-06
+Ticket-shaped subject under **other**. Short ref `kb:example-ticket` wins over YouTrack hover while the caret is inside `kb:`.
+
+Follow-ups belong in the daily notes file under `# EXAMPLE-TICKET:`.

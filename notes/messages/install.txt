@@ -1,22 +1,37 @@
-ST4Notes Plugin for Sublime Text
-================================
+.notes — getting started
+========================
 
-Thank you for installing ST4Notes (Package Control / folder name: notes).
+Command Palette (Cmd/Ctrl+Shift+P) → type  .notes
 
-Requires Sublime Text 4 with the Python 3.14 plugin host.
+Daily journal
+  ~/Documents/ST4Notes
+  (created if missing; User setting notes_file if OneDrive / localized Documents)
 
-Quick start:
-1. Preferences → Package Settings → ST4Notes → Settings – User
-2. Set youtrack_base / youtrack_token / default_project if you use YouTrack
-3. Cmd+Shift+P → "Notes: Add" or "Notes: Edit"
+Knowledge base (separate package: kb)
+  Command Palette → type  .kb
+  File: ~/Documents/ST4Notes-kb
+  Overlap with notes: insert / hover  kb:topic/subject
 
-Notes file default: ~/Documents/ST4Notes
-Override with the "notes_file" setting.
+First 30 seconds
+  1. .notes - View              journal (read-only)
+  2. Alt+Up / Alt+Down          select a # HEADER:
+  3. Enter                      edit that day's block in a slice
+  4. .notes - Add → New note    topic: any heading, then bullets
+  5. Cmd/Ctrl+Shift+Enter       commit a slice
 
-Security:
-- Never put a real youtrack_token in the package defaults or git
-- Keep tokens only in Packages/User/ST4Notes.sublime-settings
-- post_comments defaults to false
+Slices
+  Note / Issue open a scratch "slice".
+  Fields sit above --- ; body below. Alt+Up/Down cycles fields.
+  View+Enter replaces that day's header block.
+  Add → existing header, or New note, appends under today.
 
-If you previously installed the plugin from Packages/User, remove the old
-notes_plugin.py / ST4Notes.* files there to avoid duplicate commands.
+YouTrack / GitLab (optional)
+  Preferences → Package Settings → notes → Settings – User
+  youtrack_base, youtrack_token, default_project
+  gitlab_base, gitlab_token
+  Never put tokens in the package defaults.
+
+Re-open this page:  .notes - Hub → Getting started
+
+Requires Sublime Text 4, Python 3.14 plugin host (build 4205+).
+Package folder name must be "notes".

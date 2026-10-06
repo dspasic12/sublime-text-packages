@@ -1,16 +1,56 @@
 [
     {
-        "keys": ["super+enter"],
-        "command": "notes_commit_description",
+        "keys": ["super+shift+enter"],
+        "command": "notes_commit_slice",
         "context": [
-            { "key": "setting.stnotes_add_description", "operator": "equal", "operand": true }
+            { "key": "setting.stnotes_slice", "operator": "equal", "operand": true }
         ]
     },
     {
-        "keys": ["ctrl+enter"],
-        "command": "notes_commit_description",
+        "keys": ["ctrl+shift+enter"],
+        "command": "notes_commit_slice",
         "context": [
-            { "key": "setting.stnotes_add_description", "operator": "equal", "operand": true }
+            { "key": "setting.stnotes_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+down"],
+        "command": "notes_slice_next_field",
+        "args": { "forward": true },
+        "context": [
+            { "key": "setting.stnotes_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+up"],
+        "command": "notes_slice_next_field",
+        "args": { "forward": false },
+        "context": [
+            { "key": "setting.stnotes_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+down"],
+        "command": "notes_jump_ticket",
+        "args": { "forward": true },
+        "context": [
+            { "key": "setting.stnotes_journal_file", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+up"],
+        "command": "notes_jump_ticket",
+        "args": { "forward": false },
+        "context": [
+            { "key": "setting.stnotes_journal_file", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["enter"],
+        "command": "notes_edit_journal_note",
+        "context": [
+            { "key": "setting.stnotes_journal_file", "operator": "equal", "operand": true },
+            { "key": "overlay_visible", "operator": "equal", "operand": false }
         ]
     }
 ]

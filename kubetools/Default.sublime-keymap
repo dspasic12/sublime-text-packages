@@ -27,7 +27,8 @@
         "keys": ["ctrl+k", "ctrl+a"],
         "command": "kubetools_open_file",
         "context": [
-            { "key": "selector", "operator": "equal", "operand": "source.yaml, source.json" }
+            { "key": "selector", "operator": "equal", "operand": "source.yaml, source.json" },
+            { "key": "setting.kubetools_slice", "operator": "equal", "operand": true }
         ]
     },
     {
@@ -73,7 +74,33 @@
         ]
     },
     {
-        "keys": ["ctrl+k", "ctrl+,"],
-        "command": "kubetools_open_settings"
+        "keys": ["alt+down"],
+        "command": "kubetools_slice_next_field",
+        "args": { "forward": true },
+        "context": [
+            { "key": "setting.kubetools_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+up"],
+        "command": "kubetools_slice_next_field",
+        "args": { "forward": false },
+        "context": [
+            { "key": "setting.kubetools_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+shift+enter"],
+        "command": "kubetools_commit_slice",
+        "context": [
+            { "key": "setting.kubetools_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+shift+enter"],
+        "command": "kubetools_commit_slice",
+        "context": [
+            { "key": "setting.kubetools_slice", "operator": "equal", "operand": true }
+        ]
     }
 ]

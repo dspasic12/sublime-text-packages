@@ -1,0 +1,22 @@
+[
+    {
+        "caption": ".kb - Hub",
+        "command": "notes_knowledge_base"
+    },
+    {
+        "caption": ".kb - Search",
+        "command": "notes_kb_search"
+    },
+    {
+        "caption": ".kb - Create Subject",
+        "command": "notes_kb_create_subject"
+    },
+    {
+        "caption": ".kb - Insert Ref",
+        "command": "notes_kb_insert_ref"
+    },
+    {
+        "caption": ".kb - Settings",
+        "command": "kb_settings"
+    }
+]

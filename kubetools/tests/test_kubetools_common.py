@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
 import kubetools_common as ktc  # noqa: E402
@@ -43,16 +43,114 @@ class TestCommon(unittest.TestCase):
         self.assertNotIn("glpat-ABCDEFGHIJKLMN", msg3)
         self.assertIn("glpat-[redacted]", msg3)
 
+    def test_looks_like_manifest_and_secret(self):
+        deploy = (
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: demo-app\n"
+        )
+        self.assertTrue(ktc.looks_like_k8s_manifest(deploy))
+        self.assertFalse(ktc.looks_like_k8s_manifest("hello: world\n"))
+        secret = (
+            "apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\nstringData:\n  a: b\n"
+        )
+        self.assertTrue(ktc.looks_like_plain_secret(secret))
+        self.assertFalse(ktc.looks_like_sealed_secret(secret))
+        sealed = "apiVersion: bitnami.com/v1alpha1\nkind: SealedSecret\n"
+        self.assertTrue(ktc.looks_like_sealed_secret(sealed))
+        self.assertFalse(ktc.looks_like_plain_secret(sealed))
+
+    def test_example_namespace_unchanged(self):
+        blocked = (
+            "apiVersion: v1\nkind: Secret\nmetadata:\n"
+            "  name: x\n  namespace: CHANGE-ME\n"
+        )
+        ok = blocked.replace("CHANGE-ME", "demo-ns")
+        self.assertTrue(ktc.example_namespace_unchanged(blocked))
+        self.assertFalse(ktc.example_namespace_unchanged(ok))
+        self.assertFalse(ktc.example_namespace_unchanged(""))
+
+    def test_helm_gitops_and_stamp(self):
+        deploy = (
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n"
+            "  name: nginx\n  namespace: demo-ns\n"
+        )
+        self.assertIsNone(ktc.mutating_source_block_reason(None, deploy))
+        self.assertTrue(
+            ktc.looks_like_helm_source(
+                "/chart/templates/deploy.yaml",
+                "kind: Deployment\n  image: {{ .Values.image }}\n",
+            )
+        )
+        self.assertTrue(
+            ktc.looks_like_helm_source(
+                "/apps/foo/demo-app-values-override.yaml", deploy
+            )
+        )
+        self.assertTrue(ktc.looks_like_helm_source("/charts/app/Chart.yaml", "apiVersion: v2\nname: x\nversion: 1.0.0\n"))
+        self.assertTrue(
+            ktc.looks_like_gitops_source(
+                "/repo/bootstrap/dev/env-dev/foo.yaml"
+            )
+        )
+        argo = (
+            "apiVersion: argoproj.io/v1alpha1\nkind: Application\n"
+            "metadata:\n  name: x\n"
+        )
+        self.assertTrue(ktc.looks_like_argo_cd_manifest(argo))
+        self.assertIsNotNone(ktc.mutating_source_block_reason(None, argo))
+        self.assertTrue(ktc.example_resource_name_unchanged("example"))
+        self.assertTrue(ktc.example_resource_name_unchanged("example-secrets"))
+        self.assertFalse(ktc.example_resource_name_unchanged("nginx"))
+        self.assertTrue(ktc.is_protected_namespace("kube-system"))
+        stamped = ktc.stamp_applied_header("# created: x\nkind: X\n", "NOW")
+        self.assertTrue(stamped.startswith("# applied: NOW\n"))
+        again = ktc.stamp_applied_header(stamped, "LATER")
+        self.assertTrue(again.startswith("# applied: LATER\n"))
+        self.assertEqual(again.count("# applied:"), 1)
+
+    def test_yaml_scalar_field_regions(self):
+        text = (
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n"
+            "  name: example\n"
+            "  namespace: demo-ns\n"
+            "spec:\n"
+            "  replicas: 1\n"
+        )
+        values = [text[a:b] for a, b in ktc.yaml_scalar_field_regions(text)]
+        self.assertEqual(
+            values, ["apps/v1", "Deployment", "example", "demo-ns", "1"]
+        )
+        idx = ktc.next_field_index(
+            ktc.yaml_scalar_field_regions(text), 0, forward=True
+        )
+        self.assertEqual(idx, 0)
+
     def test_write_temp_under_tmpdir(self):
         path = ktc.write_temp_under_tmpdir("kind: Pod\n", suffix=".yaml")
         try:
-            self.assertTrue(path.startswith(tempfile.gettempdir()) or os.path.realpath(path).startswith(
-                os.path.realpath(tempfile.gettempdir())
-            ))
+            self.assertTrue(ktc.path_is_under(path, tempfile.gettempdir()))
             with open(path, encoding="utf-8") as fh:
                 self.assertIn("Pod", fh.read())
         finally:
             os.unlink(path)
+
+    def test_path_is_under(self):
+        root = tempfile.mkdtemp()
+        try:
+            child = os.path.join(root, "n", "f.txt")
+            os.makedirs(os.path.dirname(child))
+            with open(child, "w", encoding="utf-8") as fh:
+                fh.write("x")
+            self.assertTrue(ktc.path_is_under(child, root))
+            self.assertTrue(ktc.path_is_under(root, root))
+            self.assertFalse(ktc.path_is_under(root + "_other", root))
+        finally:
+            import shutil
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_try_fchmod_missing_is_noop(self):
+        ktc.try_fchmod(-1)
 
     def test_run_subprocess_no_shell(self):
         code, out, err = ktc.run_subprocess(

@@ -1,0 +1,78 @@
+[
+    {
+        "keys": ["super+shift+enter"],
+        "command": "notes_kb_commit_subject",
+        "context": [
+            { "key": "setting.kb_subject_edit", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+shift+enter"],
+        "command": "notes_kb_commit_subject",
+        "context": [
+            { "key": "setting.kb_subject_edit", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+alt+t"],
+        "command": "notes_kb_pick_topic",
+        "context": [
+            { "key": "setting.kb_subject_edit", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+alt+t"],
+        "command": "notes_kb_pick_topic",
+        "context": [
+            { "key": "setting.kb_subject_edit", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+alt+b"],
+        "command": "notes_kb_insert_code_fence",
+        "args": { "language": "__pick__" },
+        "context": [
+            { "key": "setting.kb_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+alt+b"],
+        "command": "notes_kb_insert_code_fence",
+        "args": { "language": "__pick__" },
+        "context": [
+            { "key": "setting.kb_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+down"],
+        "command": "notes_kb_jump_subject",
+        "args": { "forward": true },
+        "context": [
+            { "key": "setting.kb_file", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+up"],
+        "command": "notes_kb_jump_subject",
+        "args": { "forward": false },
+        "context": [
+            { "key": "setting.kb_file", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+down"],
+        "command": "notes_slice_next_field",
+        "args": { "forward": true },
+        "context": [
+            { "key": "setting.kb_slice", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+up"],
+        "command": "notes_slice_next_field",
+        "args": { "forward": false },
+        "context": [
+            { "key": "setting.kb_slice", "operator": "equal", "operand": true }
+        ]
+    }
+]

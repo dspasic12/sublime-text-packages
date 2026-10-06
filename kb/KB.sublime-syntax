@@ -1,12 +1,11 @@
 %YAML 1.2
 ---
-# .notes syntax — daily notes + knowledge-base file
-# Package: notes/
-name: Notes
+# .kb syntax — knowledge-base file (same highlighting as notes)
+# Package: kb/
+name: Knowledge Base
 file_extensions:
-  - stnotes
-  - notes
-scope: text.notes
+  - stkb
+scope: text.kb
 hidden: false
 
 variables:
@@ -82,11 +81,6 @@ contexts:
     - match: '^#\s+({{ticket_id}})(:)\s*$'
       captures:
         1: storage.type.notes
-        2: punctuation.separator.notes
-
-    - match: '^#\s+(.+)(:)\s*$'
-      captures:
-        1: markup.heading.2.notes entity.name.section.notes
         2: punctuation.separator.notes
 
     - match: '^#\s+.+$'

@@ -1,29 +1,54 @@
-# ST4Notes
+# .notes
 
-Daily notes + YouTrack / GitLab integration for Sublime Text 4.
+Daily notes + YouTrack / GitLab for Sublime Text 4.
 
-Stores a single plain-text notes file (`ST4Notes` syntax), with commands to add/search entries, open tickets, import issues, optionally post YouTrack comments, and hover GitLab MRs.
+Knowledge base lives in the separate **kb** package (palette **`.kb`**). Overlap is only `kb:topic/subject` insert + hover.
 
-## Commands (Cmd+Shift+P / Ctrl+Shift+P)
+- **Package folder / Package Control name:** `notes`
+- **Command Palette:** type **`.notes`** (same pattern as **`.kubetools`**)
+- **Syntax name:** Notes (follows your active color scheme — dark and light)
+- **Settings file:** `ST4Notes.sublime-settings` (User path kept so existing tokens keep working)
+
+Stores a single plain-text notes file with commands to add/search entries, open tickets, import issues, optionally post YouTrack comments, hover GitLab MRs, and insert `kb:` refs (knowledge base is the **kb** package).
+
+## Commands (Cmd+Shift+P / Ctrl+Shift+P — type `.notes`)
 
 | Command | What it does |
 |---------|----------------|
-| **Notes: Add** | Pick ticket → multi-line description scratch → commit |
-| **Notes: Commit Description** | Commit the Add description buffer (also **Cmd/Ctrl+Enter**) |
-| **Notes: Edit** | Open the notes file |
-| **Notes: Search** | Quick-panel search over tickets / TODO / OPS |
-| **Notes: Search Recently Resolved** | YouTrack: my resolved/closed issues (newest updated first) |
-| **Notes: Open Issue** | All issues → pick assignee → palette list (type to filter live, Enter opens) |
-| **Notes: Weekly Summary** | Scratch view of recent activity (sorted by **date**, not time) |
-| **Notes: Weekly Search** | Search within the weekly window |
-| **Notes: Create Issue** | Create a YouTrack issue (optional stage sub-tasks) |
-| **Notes: Settings** | Edit package settings |
+| **.notes - Hub** | Getting started / weekly summary / weekly search |
+| **.notes - Add** | Today's headers (append) / **New note** / YouTrack import / **Issue** |
+| **.notes - View** | Read-only journal. **Alt+Up/Down** selects a `# HEADER:`. **Enter** opens a note slice (commit **replaces** that day's block). |
+| **.notes - Search** | Quick-panel search over tickets / TODO / OPS |
+| **.notes - Search Recently Resolved** | YouTrack: my resolved/closed issues (newest updated first) |
+| **.notes - Open Issue** | All issues → pick assignee → palette list (type to filter live, Enter opens) |
+| **.notes - Settings** | Edit package settings |
 
-## Notes: Add (multi-line)
+## Notes: Add and edit
 
-1. Command Palette → **Notes: Add** → pick ticket / TODO / OPS / YouTrack import  
-2. A scratch buffer opens — **one bullet per line**  
-3. **Cmd+Enter** (Mac) / **Ctrl+Enter** (Win/Linux) or **Notes: Commit Description**
+The journal is a list of **headers** (`# PROJ-1234:`, `# TODO:`, `# standup:`) under a date. The file is read-only in **.notes - View**; all edits go through a slice.
+
+### Edit today's (or that day's) block
+
+1. **.notes - View**
+2. **Alt+Up / Alt+Down** until the header is selected
+3. **Enter** — slice opens with that day's bullets
+4. Edit freely. **Cmd/Ctrl+Shift+Enter** **replaces** that header's block on that calendar day. Close the tab to cancel.
+
+Enter on empty space (not inside a header) opens an empty **New note** slice (appends under today).
+
+### Add a new header
+
+**.notes - Add** → **New note** → set **`topic:`** to any label (`PROJ-99`, `TODO`, `standup`, `weekly standup`) → bullets → commit. Creates `# topic:` under today if missing, then appends. This is a journal heading, not a YouTrack id. YouTrack comments are **not** posted from New note (even if `post_comments` is on). Pick the ticket from Add’s list (or Import) to append *and* comment.
+
+`PROJ-1234` and `proj-1234` are the same heading. `proj 1234` and `proj_1234` are different headings and will not merge.
+
+### Append to an existing header today
+
+**.notes - Add** → pick a header already on today → slice with empty body → commit **appends** bullets (does not rewrite older lines).
+
+### YouTrack issue (not a journal edit)
+
+**.notes - Add** → **Issue** or import — still the YouTrack issue slice.
 
 Example result:
 
@@ -39,31 +64,141 @@ No `[HH:MM]` timestamps are added (legacy timestamps in old notes still highligh
 ## Hover
 
 - **YouTrack** issue URL / ticket id → summary, state, assignee, …  
-- **GitLab MR** URL (`…/-/merge_requests/N`) → status (open/merged/closed), pipeline status, changed files (requires `gitlab_base` + `gitlab_token`)
+- **GitLab MR** URL (`…/-/merge_requests/N`) → popup header shows `!N` (click opens the MR); status, pipeline, changed files (requires `gitlab_base` + `gitlab_token`)
   - Click a changed file → browser opens the MR **Changes** tab focused on that file (`#diff-content-{sha1(path)}`)
 
 ## Settings
 
-Preferences → Package Settings → ST4Notes (keep tokens in **User** settings only)
-
-Full onboarding: **[docs/USER-MANUAL.md](../docs/USER-MANUAL.md)**
+Preferences → Package Settings → **notes** (keep tokens in **User** settings only).
+Settings resource filename remains `ST4Notes.sublime-settings` for compatibility with
+`Packages/User/ST4Notes.sublime-settings`.
 
 | Key | Notes |
 |-----|--------|
 | `notes_file` | Default `~/Documents/ST4Notes` |
+| `knowledge_base_file` | Default `~/Documents/ST4Notes-kb` — used by **kb** until `User/KB.sublime-settings` exists |
 | `youtrack_base` / `youtrack_token` | YouTrack |
 | `gitlab_base` / `gitlab_token` | GitLab MR hover (`read_api`) |
 | `default_project` | YouTrack project shortName (e.g. `MYPROJECT`) |
-| `issue_stages` | **Sub-task labels** for Create Issue — e.g. `Design,Dev,QA,Deploy`. **Not** Kubernetes cluster names (those are Kubetools `stages`). Use `[]` to be prompted each time until you save a list. |
+| `issue_stages` | Sub-task **labels** that seed Create Issue (e.g. `Design,Dev,QA,Deploy` or env names). Empty uses those four in the slice; commit with `stages: true` saves the labels back here. |
 | `notes_path_jail` | `notes_file` must stay under this dir (default `~`) |
 | `note_max_lines` / `note_max_line_len` | Multi-line Add limits (50 / 500) |
 | `post_comments` | Default `false` |
+| `notes_seed_demo` | Seed starter examples when the journal file is missing or empty |
+| `show_getting_started` | Open the getting-started tab once after install (opt out with `false`) |
+| `kb_hover_enabled` / `kb_popup_*` / `kb_seed_demo` / `kb_git_friendly` | Legacy keys; prefer **kb** / `KB.sublime-settings` |
 
-### Create Issue sub-tasks
+## Issue slice (YouTrack)
 
-With `issue_stages` set, **Notes: Create Issue** can spawn child issues named
-`{parent summary} - {stage}`. Use workflow phase labels (e.g. Design, Dev, QA),
-not Kubernetes cluster folder names (those belong in Kubetools seal `stages`).
+**.notes - Add** → **Issue** (empty) or import from YouTrack. Same slice either way.
+
+**Commit:** **Cmd+Shift+Enter** (Mac) / **Ctrl+Shift+Enter** (Win/Linux). Close the tab to cancel.
+
+- New issue: `ticket:` is read-only (YouTrack assigns the id on commit). `description:` is multiline — indent extra lines with two spaces.
+- Import: `ticket:` is filled and locked; other fields are populated from YouTrack. Body bullets below `---` become a journal note.
+
+Contract: **fields above `---`**, **body below**.
+
+### Fields (above `---`)
+
+| Field | Meaning |
+|-------|---------|
+| `ticket` | Read-only. Empty on create; import fills `PROJ-1234`. |
+| `project` | YouTrack shortName. Required when creating a **new** parent. |
+| `summary` | Parent title. Also fills `$summary` and `$name` in sub-task titles. |
+| `description` | Issue description (multiline; indent continuation lines). |
+| `assignee` | YouTrack **email** (prefills yours on create) or login. Empty = unassigned. |
+| `reporter` / `due` / `state` / `priority` | Filled on import (informational). |
+| `parent` | Empty = create a new parent from `summary`. Or `PROJ-1234` / issue URL to attach children only. |
+| `stages` | `true` = create the sub-tasks listed below. `false` (default) = a single issue from `summary`. |
+
+### Sub-tickets (below `---`, when `stages: true`)
+
+One child per line:
+
+```text
+- <label> | <title template>
+```
+
+- **Left of `|`** is the label (`$stage`). It is saved to `issue_stages` on commit.
+- **Right of `|`** is the YouTrack title. Placeholders:
+  - `$summary` / `$name` → parent `summary`
+  - `$stage` → the label on that line
+- Delete a line to skip that child. Ignored when `stages: false`.
+
+Default lines (from `issue_stages`, or Design / Dev / QA / Deploy if empty):
+
+```text
+- Design | $name - Design
+- Dev | $name - Dev
+- QA | $name - QA
+- Deploy | $name - Deploy
+```
+
+**Override `$name` with env names** (instead of Design/Dev):
+
+```text
+summary: Roll out sealed-secrets docs
+stages: true
+---
+- env-dev | $name - env-dev
+- env-test | $name - env-test
+```
+
+Creates parent `Roll out sealed-secrets docs` plus children titled `Roll out sealed-secrets docs - env-dev` and `… - env-test`. Same idea with `$summary - $stage`.
+
+Attach **only sub-tasks** under an existing ticket (`summary` can stay empty — title is fetched for `$name`):
+
+```text
+parent: PROJ-1234
+stages: true
+---
+- env-dev | $name - env-dev
+- env-test | $name - env-test
+```
+
+## Knowledge base (package **kb**)
+
+Install **kb** and use Command Palette **`.kb`**. Notes only inserts/hovers `kb:topic/subject`.
+
+Single file (`knowledge_base_file`) with topics and subjects:
+
+```text
+# TOPIC: my-topic
+## SUBJECT: my-subject
+command examples and notes…
+
+## SUBJECT: another
+…
+```
+
+| Action | How |
+|--------|-----|
+| Hub | `.kb - Hub` |
+| Browse | topics → subjects; arrows preview in KB file; Enter opens **edit-slice** (Cmd/Ctrl+Shift+Enter saves) |
+| Search | flat subject list; same arrow-preview / Enter behavior |
+| Create subject | `.kb - Create Subject` (or hub) → **edit-slice** only (nothing written until commit). SUBJECT selected; pick topic with **Cmd/Ctrl+Alt+T**. Closing the tab without commit leaves no stub in the KB file. |
+| Move subject | Hub **Move subject to topic…** → pick subject → pick topic (or New topic…). Writes immediately; empty source topics are dropped. |
+| Slice keys | **Cmd/Ctrl+Shift+Enter** commit · **Cmd/Ctrl+Alt+T** topic picker (then SUBJECT is selected) · **Alt+Up / Alt+Down** next/prev field (not created date) · **Cmd/Ctrl+Alt+B** code fence |
+| KB file | Read-only in Sublime. **Alt+Up / Alt+Down** jumps **SUBJECT** titles. Change content via edit-slice only. Slice commit (and hub **Format knowledge base**) rewrites **canonical layout**: one blank line between subjects, two before each later `# TOPIC:`, headers `## SUBJECT` / `- created` / `- modified`, LF, no reorder, dates unchanged by format. |
+| Insert ref | `.kb - Insert Ref` → `kb:topic/subject` at caret |
+| Hover ref | topic → subjects panel; subject title or `kb:…` line → **edit-slice** |
+| Copy | ⧉ on fenced blocks copies plaintext (including `secret` fences) |
+| Obfuscate | Context menu **.kb - Obfuscate** (selection required) → `⟦secret:base64⟧` (not encryption) |
+
+### Topics and tickets
+
+- **Topics** (`# TOPIC:`) organize subjects. Optional — no header (or `# TOPIC: other`) → topic **other**. In the edit-slice, **Cmd/Ctrl+Alt+T** opens a topic picker (type to filter); commit moves the subject under that topic. Empty topics are dropped when the last subject leaves them.
+- **Refs:** `kb:registry/cleanup-images` or short `kb:proj-1234` (= `kb:other/proj-1234`).
+- **Created date:** `- created: YYYY-MM-DD` is added automatically by **Append stub**; keep it when editing.
+- **Git:** point `knowledge_base_file` at a path inside a git repo; `kb_git_friendly` writes mode `0644`. Keep secrets out of KB (or use obfuscate). Daily `notes_file` stays private/local chronologically; KB is the shareable runbook store.
+- **Unify notes+KB?** Keep separate files: notes = dated journal + ticket log; KB = durable, searchable, git-friendly subjects. Linking via `kb:…` is the unification layer — merging into one file mixes ephemeral daily noise with curated runbooks.
+
+
+- Hover is off while the KB file itself is focused
+- Browse/Search preview reuses the open KB file view in the other pane (scroll only; does not steal the dropdown keyboard)
+- Slugs are lowercase with hyphens (`My Topic` → `my-topic`)
+- Colors follow your active UI / color scheme
 
 ## Safety
 
@@ -79,9 +214,20 @@ not Kubernetes cluster folder names (those belong in Kubetools seal `stages`).
 
 Do **not** minify / bytecode-obfuscate this package: Sublime loads plain `.py` from the package folder; shipping secrets-free source is the safety model.
 
+## Getting started tab
+
+After install (Package Control **or** a git symlink) Sublime opens a scratch tab
+with the same text as `messages/install.txt` — the same mechanism LSP uses
+(`messages.json` → `install`) plus `plugin_loaded` so symlink installs still
+get a tab.
+
+- Auto-show once (flag in Sublime's cache dir). Set `show_getting_started` to `false` to never auto-open.
+- Re-open any time: **.notes - Hub → Getting started**
+- Starter journal (only if missing/empty): `examples/ST4Notes.example` (KB seed is the **kb** package)
+
 ## Install / live symlink
 
-Do **not** keep a second `notes_plugin.py` / `*.sublime-commands` / `ST4Notes.sublime-syntax` under `Packages/User/` (even in a `_disabled_*` folder) — Sublime loads those and duplicates every Command Palette entry.
+Do **not** keep a second `notes_plugin.py` / `*.sublime-commands` / `*.sublime-syntax` under `Packages/User/` (even in a `_disabled_*` folder) — Sublime loads those and duplicates every Command Palette entry.
 
 ```bash
 ln -s "/path/to/sublime-text-packages/notes" \
@@ -91,5 +237,5 @@ ln -s "/path/to/sublime-text-packages/notes" \
 ## Requirements
 
 - Sublime Text 4 with **Python 3.14** plugin host (see `.python-version`; build ≥4169)
-- Package folder name must be **`notes`** (Package Control name aligned; Settings menus use `${packages}/notes/…`)
+- Package folder name must be **`notes`** (Package Control name aligned; Settings menus use `${packages}/notes/…`; Command Palette prefix **`.notes`**)
 - Optional YouTrack + GitLab tokens for API features

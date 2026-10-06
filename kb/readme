@@ -1,0 +1,44 @@
+# .kb
+
+Standalone knowledge base for Sublime Text 4 (topics / subjects / `kb:` refs).
+
+- **Package folder / Package Control name:** `kb`
+- **Command Palette:** type **`.kb`**
+- **Settings file:** `KB.sublime-settings`
+- **Command names** stay `notes_knowledge_base` / `notes_kb_*` so existing keymaps keep working
+
+Daily journal, YouTrack, and GitLab stay in the **notes** package. The only overlap is inserting and hovering `kb:topic/subject`.
+
+## Commands (type `.kb`)
+
+| Command | What it does |
+|---------|----------------|
+| **.kb - Hub** | Browse / create / insert ref / view file / format / stub / getting started |
+| **.kb - Search** | Flat search of all subjects |
+| **.kb - Insert Ref** | Search subjects → insert `kb:topic/subject` at caret |
+| **.kb - Create Subject** | Edit-slice; commit with **Cmd/Ctrl+Shift+Enter** |
+| **.kb - Settings** | Edit package settings |
+
+## Settings
+
+Preferences → Package Settings → **kb**. If `Packages/User/KB.sublime-settings` does not exist yet, `knowledge_base_file` and hover keys still follow **User/ST4Notes.sublime-settings**.
+
+| Key | Notes |
+|-----|--------|
+| `knowledge_base_file` | Default `~/Documents/ST4Notes-kb` |
+| `kb_path_jail` | File must stay under this dir (default `~`; falls back to `notes_path_jail`) |
+| `kb_hover_enabled` | Hover popups for `kb:` refs |
+| `kb_popup_max_width` / `kb_popup_max_height` | Minihtml popup size |
+| `kb_preview_on_highlight` | Arrow through Browse/Search previews in the other pane |
+| `kb_seed_demo` | Seed starter examples when the file is missing or empty |
+| `kb_git_friendly` | `0644` vs `0600` |
+
+## Slices
+
+Create / edit subjects in a scratch slice. **Cmd/Ctrl+Shift+Enter** commits. Alt+T picks topic. Alt+B inserts a code fence. Alt+Up/Down jumps SUBJECT headers in the read-only KB file.
+
+Select text and use the context menu **.kb - Obfuscate** / **.kb - Deobfuscate** (hidden unless something is selected).
+
+## Hover
+
+`kb:topic/subject` (or `kb:subject` under topic **other**) shows the subject body. Copy fenced code from the popup. Same hover works in the notes journal when both packages are installed.

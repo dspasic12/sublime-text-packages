@@ -1,18 +1,14 @@
 [
     {
-        "caption": "Notes: Add",
+        "caption": ".notes - Add",
         "command": "notes_add"
     },
     {
-        "caption": "Notes: Search",
+        "caption": ".notes - Search",
         "command": "notes_search"
     },
     {
-        "caption": "Notes: Search Recently Resolved",
-        "command": "notes_search_resolved"
-    },
-    {
-        "caption": "Notes: Open Issue",
+        "caption": ".notes - Open Issue",
         "command": "notes_open_issue"
     }
 ]

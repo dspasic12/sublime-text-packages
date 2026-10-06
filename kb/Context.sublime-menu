@@ -1,0 +1,18 @@
+[
+    {
+        "caption": ".kb - Hub",
+        "command": "notes_knowledge_base"
+    },
+    {
+        "caption": ".kb - Insert Ref",
+        "command": "notes_kb_insert_ref"
+    },
+    {
+        "caption": ".kb - Obfuscate",
+        "command": "kb_obfuscate_selection"
+    },
+    {
+        "caption": ".kb - Deobfuscate",
+        "command": "kb_deobfuscate_selection"
+    }
+]

@@ -1,44 +1,79 @@
 {
-    // Absolute or ~ -expanded path to the single notes file.
+    // notes — Preferences → Package Settings → notes → Settings
+    // Sublime Text 4 Build 4205+ (Python 3.14 plugin host) on macOS, Windows, Linux.
+    // Sublime merges Default (this file) + User (right pane).
+    // Put tokens, real YouTrack/GitLab URLs, and personal paths only in
+    // Packages/User/ST4Notes.sublime-settings — never in this package file.
+
+    // --- Journal file -------------------------------------------------------
+    // Default is ~/Documents/ST4Notes (~ = home: macOS/Linux $HOME,
+    // Windows %USERPROFILE%). The Documents folder is created if missing.
+    //
+    // Override in User settings when that is not the folder you actually use:
+    //   Windows OneDrive  → "~/OneDrive/Documents/ST4Notes"
+    //   Localized Linux   → e.g. "~/Dokumente/ST4Notes" (XDG user-dirs)
+    //   Git checkout      → "~/src/notes/ST4Notes"
     "notes_file": "~/Documents/ST4Notes",
 
     // notes_file must resolve under this directory (default: home).
-    // Raise intentionally only if you keep notes outside $HOME.
+    // Raise only if you keep notes outside $HOME (then set the same extra
+    // parent here, e.g. "/mnt/data").
     "notes_path_jail": "~",
 
-    // YouTrack issue browser base URL (https required; trailing slash recommended).
+    // Seed the starter journal when notes_file is missing or empty.
+    "notes_seed_demo": true,
+
+    // First-run scratch tab (Package Control also shows messages/install.txt).
+    // Palette: .notes - Hub → Getting started.
+    "show_getting_started": true,
+
+    // --- Knowledge base (kb package) ----------------------------------------
+    // Path used by kb until Packages/User/KB.sublime-settings exists.
+    // Same Documents caveats as notes_file (OneDrive / localized XDG).
+    "knowledge_base_file": "~/Documents/ST4Notes-kb",
+
+    // Hover + browse for kb: refs inside the notes journal.
+    "kb_hover_enabled": true,
+    "kb_popup_max_width": 780,
+    "kb_popup_max_height": 900,
+    "kb_preview_on_highlight": true,
+    "kb_seed_demo": true,
+    // true → 0644 (git-friendly); false → 0600
+    "kb_git_friendly": true,
+
+    // --- YouTrack (optional) ------------------------------------------------
+    // HTTPS issue browser base (trailing slash recommended).
     // Example: "https://youtrack.example.com/issue/"
     "youtrack_base": "",
 
-    // Permanent API token. Prefer setting this only in
-    // Packages/User/ST4Notes.sublime-settings — never commit a real token.
-    // Keep this package default empty. YouTrack → Profile → Authentication → New token
+    // Permanent token — User settings only. Keep this default empty.
+    // YouTrack → Profile → Authentication → New token
     // Scopes: Read Issue, Create Issue, Update Issue, Create Comment
     "youtrack_token": "",
 
-    // GitLab base URL for MR hover (https required). Example: "https://gitlab.example.com/"
-    "gitlab_base": "",
-
-    // GitLab personal access token (api / read_api). User settings only — never commit.
-    // Keep this package default empty.
-    "gitlab_token": "",
-
-    // Default YouTrack project shortName (issue create / import / TODO list).
+    // YouTrack project shortName for create / import / Open Issue.
     "default_project": "",
 
-    // Stage names offered when creating YouTrack stage *sub-tasks*
-    // (issue workflow labels — not Kubernetes cluster names).
-    // Leave [] to be prompted at creation time.
-    // Example: ["Design", "Dev", "QA", "Deploy"]
+    // Sub-task labels for Add → Issue (seed the slice list).
+    // Empty → Design, Dev, QA, Deploy in the slice.
+    // Workflow labels only — not Kubernetes cluster names.
     "issue_stages": [],
 
-    // When true, Notes - Add also posts the note text as a YouTrack comment.
+    // When true, posting a journal note as a YouTrack comment also requires:
+    // the slice came from Add (existing ticket / Import), and topic looks like
+    // PROJ-1234. New note never comments. Default off.
     "post_comments": false,
 
-    // Multi-line note limits (Notes: Add description scratch)
+    // --- GitLab MR hover (optional) ----------------------------------------
+    // HTTPS GitLab root. Example: "https://gitlab.example.com/"
+    "gitlab_base": "",
+
+    // Personal access token (api / read_api) — User settings only.
+    "gitlab_token": "",
+
+    // --- Limits -------------------------------------------------------------
     "note_max_lines": 50,
     "note_max_line_len": 500,
-
     "api_timeout_sec": 10,
     "api_max_retries": 2
 }

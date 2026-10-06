@@ -12,10 +12,12 @@ Package folder / Package Control name: **`kubetools`** (must match for Settings 
 
 | Command | What it does |
 |---------|----------------|
+| **.kubetools - Create…** | Scratch slice: minimal Deployment or Secret. **Cmd/Ctrl+Shift+Enter** applies (not git). Apply refused while namespace is `CHANGE-ME` or name is `example` |
+| **.kubetools - Commit Slice** | Same as apply on the create slice only |
 | **.kubetools - Compare State** | Pick context → underline differing values **inline** on the manifest |
 | **.kubetools - Clear Compare Overlays** | Remove inline annotations / banner |
-| **.kubetools - Apply Open File** | Context → namespace if needed → dry-run + diff + confirm → `kubectl apply` |
-| **.kubetools - Dry-Run Open File** | Read-only server-side dry-run |
+| **.kubetools - Apply Open File** | **Create slice only.** Context → dry-run + diff + confirm → `kubectl apply` |
+| **.kubetools - Dry-Run Open File** | Read-only server-side dry-run (not Helm / GitOps / Argo Application files) |
 | **.kubetools - Seal** | Selection → `--raw` encrypt in SealedSecret; no selection → seal Secret → `*-sealedsecret.yaml` |
 | **.kubetools - Unseal** | Offline decrypt selection with stage private key → scratch tab (`DO-NOT-COMMIT`, read-only) |
 
@@ -29,9 +31,9 @@ If Kubetools `stages` is empty, legacy User `Kubeseal.sublime-settings` is used
 as a fallback.
 
 **When GitOps adds** `environments/<env>/<cluster>/sealed-secrets/pub.pem`, add a
-stage whose `name` matches `<cluster>`. Run **Validate Seal Config** after edits.
-If a cluster uses a **dedicated** Sealed Secrets key, read that cluster’s
-`sealed-secrets` docs before reusing sealed YAML from another cluster.
+stage whose `name` matches `<cluster>`. From the Hub, run **Validate Seal Config**
+after edits. If a cluster uses a **dedicated** Sealed Secrets key, read that
+cluster’s `sealed-secrets` docs before reusing sealed YAML from another cluster.
 
 See **[docs/USER-MANUAL.md](../docs/USER-MANUAL.md)** for onboarding and
 `context_path_aliases`.
@@ -74,12 +76,28 @@ global `ctrl+k` chords):
 | **h** | Hub (all actions) |
 | **c** | Compare State |
 | **d** | Dry-Run |
-| **a** | Apply (still full confirms) |
+| **a** | Apply (**create slice only**; still full confirms) |
 | **s** / **u** | Seal / Unseal |
 | **n** / **p** | Next / Prev diff |
 | **y** | Copy live under caret |
 | **x** | Clear overlays |
 | **,** | Settings |
+
+Context menus, Command Palette, and Hub only show actions that match the buffer
+(manifest vs Secret/SealedSecret vs compare overlays). **Create…** is always listed.
+
+On a create slice, **Cmd+Shift+Enter** (Mac) / **Ctrl+Shift+Enter** (Win/Linux)
+starts Apply (same chord as `.notes` commit — this is **not** git commit/push).
+**Alt+Up / Alt+Down** select YAML scalars. After a successful apply, `# applied:`
+is stamped at the top and the buffer becomes **read-only**.
+
+**kubectl apply never runs** on Helm values/charts/templates, GitOps
+`bootstrap/` / `environments/` trees, Argo CD `Application` CRs, leftover
+template names (`example`), `CHANGE-ME` namespace, or `kube-system`. Apply is
+refused on every buffer that was not opened with **Create…**.
+
+**File → Save As…** to keep the slice YAML. Compare / Dry-Run remain read-only
+on other manifests (Dry-Run is also refused for Helm/GitOps/Argo files).
 
 Remap: Preferences → Package Settings → Kubetools → Key Bindings.
 
@@ -92,8 +110,9 @@ When the open file path contains a cluster folder (e.g.
 `environments/dev/my-cluster/...`), that kubectl context is **highlighted** in the
 context quick panel. The panel is **always** shown — never skipped.
 
-- Apply still requires dry-run + confirm (+ type-to-confirm on prod-like names)
+- Apply is **create-slice only**, with dry-run + confirm (+ type-to-confirm on prod-like names)
 - Compare / Dry-Run never mutate the cluster or the open file
+- Helm / GitOps / Argo Application YAML cannot Apply or Dry-Run
 - Settings: `guess_context_from_path`, `context_path_aliases`
 
 **Preferences → Package Settings → Kubetools → Settings** (Default | User), or

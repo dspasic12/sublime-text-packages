@@ -1,0 +1,30 @@
+{
+    // kb — Preferences → Package Settings → kb → Settings
+    // Sublime Text 4 Build 4205+ (Python 3.14 plugin host) on macOS, Windows, Linux.
+    // Sublime merges Default (this file) + User (right pane).
+    // If Packages/User/KB.sublime-settings does not exist yet, knowledge_base_file
+    // and jail fall back to ST4Notes so existing installs keep the same path.
+
+    // Default ~/Documents/ST4Notes-kb (~ = home). Documents is created if missing.
+    // Override in User settings for OneDrive (Windows) or a localized Documents
+    // dir on Linux (e.g. ~/Dokumente), or a git working copy.
+    "knowledge_base_file": "~/Documents/ST4Notes-kb",
+
+    // knowledge_base_file must resolve under this directory (default: home).
+    // Raise together with the path if the file lives outside $HOME.
+    "kb_path_jail": "~",
+
+    "kb_hover_enabled": true,
+    "kb_popup_max_width": 780,
+    "kb_popup_max_height": 900,
+    // Arrow through Browse/Search scrolls the KB file in the other pane
+    "kb_preview_on_highlight": true,
+
+    // Seed starter examples when the KB file is missing or empty
+    "kb_seed_demo": true,
+    // true → 0644 (git-friendly); false → 0600
+    "kb_git_friendly": true,
+
+    // First-run scratch tab. Palette: .kb - Hub → Getting started.
+    "show_getting_started": true
+}

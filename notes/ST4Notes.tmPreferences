@@ -4,11 +4,9 @@
 <plist version="1.0">
 <dict>
     <key>name</key>
-    <string>ST4Notes Comments</string>
-
+    <string>Notes Comments</string>
     <key>scope</key>
-    <string>text.stnotes</string>
-
+    <string>text.notes, text.stnotes</string>
     <key>settings</key>
     <dict>
         <key>shellVariables</key>

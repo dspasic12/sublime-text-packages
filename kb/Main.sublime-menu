@@ -3,48 +3,27 @@
         "id": "tools",
         "children": [
             {
-                "caption": ".notes",
-                "id": "notes",
+                "caption": ".kb",
+                "id": "kb",
                 "children": [
                     {
                         "caption": "Hub…",
-                        "command": "notes_hub"
+                        "command": "notes_knowledge_base"
                     },
                     {
-                        "caption": "Add",
-                        "command": "notes_add"
+                        "caption": "Search subjects…",
+                        "command": "notes_kb_search"
                     },
                     {
-                        "caption": "Commit Description",
-                        "command": "notes_commit_description"
-                    },
-                    {
-                        "caption": "View",
-                        "command": "notes_view"
-                    },
-                    {
-                        "caption": "Search",
-                        "children": [
-                            {
-                                "caption": "Notes File…",
-                                "command": "notes_search"
-                            },
-                            {
-                                "caption": "Recently Resolved / Closed (mine)",
-                                "command": "notes_search_resolved"
-                            }
-                        ]
-                    },
-                    {
-                        "caption": "Open Issue",
-                        "command": "notes_open_issue"
+                        "caption": "Insert ref at caret…",
+                        "command": "notes_kb_insert_ref"
                     },
                     {
                         "caption": "-"
                     },
                     {
                         "caption": "Settings…",
-                        "command": "notes_settings"
+                        "command": "kb_settings"
                     }
                 ]
             }
@@ -61,31 +40,31 @@
                 "id": "package-settings",
                 "children": [
                     {
-                        "caption": "notes",
+                        "caption": "kb",
                         "children": [
                             {
                                 "caption": "Settings",
-                                "command": "notes_settings"
+                                "command": "kb_settings"
                             },
                             {
                                 "caption": "Settings – Default",
                                 "command": "open_file",
                                 "args": {
-                                    "file": "${packages}/notes/ST4Notes.sublime-settings"
+                                    "file": "${packages}/kb/KB.sublime-settings"
                                 }
                             },
                             {
                                 "caption": "Settings – User",
                                 "command": "open_file",
                                 "args": {
-                                    "file": "${packages}/User/ST4Notes.sublime-settings"
+                                    "file": "${packages}/User/KB.sublime-settings"
                                 }
                             },
                             {
                                 "caption": "Key Bindings",
                                 "command": "edit_settings",
                                 "args": {
-                                    "base_file": "${packages}/notes/Default.sublime-keymap",
+                                    "base_file": "${packages}/kb/Default.sublime-keymap",
                                     "user_file": "${packages}/User/Default (${platform}).sublime-keymap",
                                     "default": "[\n\t$0\n]\n"
                                 }
